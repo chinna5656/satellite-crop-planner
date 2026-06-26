@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>แดชบอร์ดวางแผนและจัดการเพาะปลูกด้วยดาวเทียม</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
+    />
+    <link rel="stylesheet" href="/static/styles.css?v=20260620-date-range" />
+  </head>
+  <body class="app-shell text-slate-900">
+    <div class="min-h-screen lg:grid lg:grid-cols-[390px_minmax(0,1fr)]">
+      <aside class="sidebar">
+        <div class="brand-panel">
+          <div>
+            <p class="eyebrow">เกษตรแม่นยำ</p>
+            <h1 class="mt-1 text-xl font-bold text-slate-950">ระบบวางแผนเพาะปลูก</h1>
+            <p class="mt-1 text-sm text-slate-500">ติดตามสุขภาพพืช ความร้อนสะสม และช่วยตัดสินใจเพาะปลูก</p>
+          </div>
+          <a href="/raster" class="nav-pill">
+            แผนที่ราสเตอร์
+          </a>
+        </div>
+
+        <div class="space-y-5 px-5 py-5">
+          <section class="quick-actions">
+            <a class="quick-action active" href="/">
+              <span>แดชบอร์ด</span>
+              <strong>แจ้งเตือนและวางแผน</strong>
+            </a>
+            <a class="quick-action" href="/raster">
+              <span>แผนที่ราสเตอร์</span>
+              <strong>ชั้นข้อมูล NDVI และ LST</strong>
+            </a>
+          </section>
+
+          <section class="grid grid-cols-2 gap-3">
+            <article class="kpi-card">
+              <span>ค่าเฉลี่ย NDVI</span>
+              <strong id="avgNdvi">0.71</strong>
+              <small class="text-emerald-700">ทรงพุ่มสมบูรณ์</small>
+            </article>
+            <article class="kpi-card">
+              <span>อุณหภูมิผิวดิน</span>
+              <strong id="avgLst">29.4 C</strong>
+              <small class="text-amber-700">ความเครียดปานกลาง</small>
+            </article>
+            <article class="kpi-card">
+              <span>ความเสี่ยงเสียหาย</span>
+              <strong id="damagePercent">8%</strong>
+              <small class="text-emerald-700">ต่ำกว่าเกณฑ์</small>
+            </article>
+            <article class="kpi-card">
+              <span>หมุดแจ้งเตือน</span>
+              <strong id="alertCount">0</strong>
+              <small class="text-slate-500">จากการวิเคราะห์ล่าสุด</small>
+            </article>
+          </section>
+
+          <section class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h2 class="text-sm font-bold text-slate-950">ขอบเขตแปลง</h2>
+              <button id="clearFieldBtn" class="text-link">
+                ล้าง
+              </button>
+            </div>
+            <p class="text-sm leading-6 text-slate-600">
+              วาดสี่เหลี่ยมหรือรูปหลายเหลี่ยมบนแผนที่ดาวเทียม ระบบจะแปลงเป็นพิกัด bbox แบบ WGS84 เพื่อส่งให้แบ็กเอนด์
+            </p>
+            <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">bbox ที่เลือก</label>
+              <pre id="bboxOutput" class="mt-2 whitespace-pre-wrap text-xs text-slate-700">ยังไม่ได้เลือกแปลง</pre>
+            </div>
+          </section>
+
+          <section class="space-y-3">
+            <h2 class="text-sm font-bold text-slate-950">คำขอวิเคราะห์</h2>
+            <div class="date-grid">
+              <div>
+                <label class="form-label" for="startDate">วันที่เริ่มต้น</label>
+                <input
+                  id="startDate"
+                  class="form-input"
+                  type="date"
+                  value="2025-01-01"
+                />
+              </div>
+              <div>
+                <label class="form-label" for="endDate">วันที่สิ้นสุด</label>
+                <input
+                  id="endDate"
+                  class="form-input"
+                  type="date"
+                  value="2025-03-31"
+                />
+              </div>
+              <div>
+                <label class="form-label" for="rainfallInput">ฝนสะสม 15 วัน (มม.)</label>
+                <input id="rainfallInput" class="form-input" type="number" min="0" value="42" />
+              </div>
+            </div>
+            <button id="analyzeBtn" class="primary-btn w-full">วิเคราะห์แปลง</button>
+            <button id="loadSampleBtn" class="secondary-btn w-full">โหลดข้อมูลตัวอย่าง</button>
+            <label class="secondary-btn flex cursor-pointer items-center justify-center">
+              นำเข้า JSON จากแบ็กเอนด์
+              <input id="jsonUpload" type="file" accept="application/json" class="hidden" />
+            </label>
+            <p id="statusText" class="text-sm text-slate-500">พร้อมวิเคราะห์แปลง</p>
+          </section>
+
+          <section class="space-y-3">
+            <div class="flex items-center justify-between">
+              <h2 class="text-sm font-bold text-slate-950">ตัวช่วยวางแผนปลูก</h2>
+              <span id="plantingWindow" class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                สัปดาห์ที่ 3
+              </span>
+            </div>
+            <div class="chart-panel">
+              <canvas id="soilMoistureChart" height="170"></canvas>
+            </div>
+            <div class="recommendation-card">
+              <p class="text-sm font-semibold text-emerald-100">คำแนะนำ</p>
+              <p id="plannerRecommendation" class="mt-2 text-sm leading-6">
+                ควรปลูกในสัปดาห์ที่ 3 หลังฝนเริ่มคงที่และอุณหภูมิผิวดินต่ำกว่า 31 C
+              </p>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <main class="relative min-h-[70vh] lg:min-h-screen">
+        <div id="map" class="absolute inset-0"></div>
+
+        <div class="map-toolbar">
+          <div>
+            <p class="eyebrow">มุมมองดาวเทียม</p>
+            <p class="text-sm font-semibold text-slate-950">วาดขอบเขตแปลงและตรวจสอบการแจ้งเตือนพืช</p>
+          </div>
+          <div class="legend">
+            <span><i class="pin-dot bg-emerald-500"></i> ปกติ</span>
+            <span><i class="pin-dot bg-red-500"></i> เสี่ยงรุนแรง</span>
+          </div>
+        </div>
+
+        <div class="map-status-card">
+          <span class="status-dot"></span>
+          <div>
+            <p class="text-xs font-bold uppercase tracking-wide text-slate-500">ขั้นตอน</p>
+            <p class="text-sm font-semibold text-slate-900">วาดแปลง วิเคราะห์ และตรวจสอบหมุดแจ้งเตือน</p>
+          </div>
+        </div>
+
+        <button id="mobilePanelBtn" class="mobile-panel-btn">แดชบอร์ด</button>
+      </main>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="/static/app.js?v=20260624-result-display"></script>
+  </body>
+</html>

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>แผนที่ราสเตอร์ NDVI และ LST</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260620-date-range" />
+  </head>
+  <body class="app-shell text-slate-900">
+    <div class="min-h-screen lg:grid lg:grid-cols-[360px_minmax(0,1fr)]">
+      <aside class="sidebar">
+        <div class="brand-panel block">
+          <p class="eyebrow">วิเคราะห์ราสเตอร์</p>
+          <div class="mt-1 flex items-center justify-between gap-3">
+            <h1 class="text-xl font-bold text-slate-950">ชั้นข้อมูล NDVI / LST</h1>
+            <a href="/" class="nav-pill alt">แดชบอร์ด</a>
+          </div>
+          <p class="mt-1 text-sm text-slate-500">แสดงผลราสเตอร์จาก Microsoft Planetary Computer และข้อมูลวิเคราะห์รายแปลง</p>
+        </div>
+
+        <div class="space-y-5 px-5 py-5">
+          <section class="quick-actions">
+            <a class="quick-action" href="/">
+              <span>แดชบอร์ด</span>
+              <strong>แจ้งเตือนและวางแผน</strong>
+            </a>
+            <a class="quick-action active" href="/raster">
+              <span>แผนที่ราสเตอร์</span>
+              <strong>ชั้นข้อมูล NDVI และ LST</strong>
+            </a>
+          </section>
+
+          <section class="space-y-3">
+            <h2 class="text-sm font-bold text-slate-950">โหมดชั้นข้อมูล</h2>
+            <div class="grid grid-cols-3 gap-2">
+              <button class="layer-toggle active" data-layer="ndvi">NDVI</button>
+              <button class="layer-toggle" data-layer="lst">LST</button>
+              <button class="layer-toggle" data-layer="anomaly">ความเสี่ยง</button>
+            </div>
+            <label class="form-label" for="opacitySlider">ความทึบราสเตอร์</label>
+            <input id="opacitySlider" class="w-full accent-emerald-700" type="range" min="20" max="95" value="68" />
+          </section>
+
+          <section class="grid grid-cols-2 gap-3">
+            <article class="kpi-card">
+              <span>ค่าเฉลี่ย NDVI</span>
+              <strong id="rasterNdvi">--</strong>
+              <small class="text-emerald-700">ความสมบูรณ์พืช</small>
+            </article>
+            <article class="kpi-card">
+              <span>ค่าเฉลี่ย LST</span>
+              <strong id="rasterLst">--</strong>
+              <small class="text-amber-700">ความร้อนผิวดิน</small>
+            </article>
+            <article class="kpi-card">
+              <span>พื้นที่เสี่ยง</span>
+              <strong id="rasterRisk">--</strong>
+              <small class="text-red-700">เซลล์ผิดปกติ</small>
+            </article>
+            <article class="kpi-card">
+              <span>เซลล์</span>
+              <strong id="rasterCells">--</strong>
+              <small class="text-slate-500">ตัวอย่างที่แสดงผล</small>
+            </article>
+          </section>
+
+          <section class="space-y-3">
+            <h2 class="text-sm font-bold text-slate-950">วิเคราะห์แปลงใหม่</h2>
+            <p class="text-sm leading-6 text-slate-600">วาดขอบเขตแปลงและเรียกใช้แบ็กเอนด์เพื่อแสดงชั้นข้อมูล NDVI/LST บนแผนที่</p>
+            <pre id="rasterBbox" class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">ยังไม่ได้เลือกแปลง</pre>
+            <div class="date-grid">
+              <div>
+                <label class="form-label" for="rasterStartDate">วันที่เริ่มต้น</label>
+                <input id="rasterStartDate" class="form-input" type="date" value="2025-01-01" />
+              </div>
+              <div>
+                <label class="form-label" for="rasterEndDate">วันที่สิ้นสุด</label>
+                <input id="rasterEndDate" class="form-input" type="date" value="2025-03-31" />
+              </div>
+              <div>
+                <label class="form-label" for="rasterRainfall">ฝนสะสม 15 วัน (มม.)</label>
+                <input id="rasterRainfall" class="form-input" type="number" min="0" value="42" />
+              </div>
+            </div>
+            <button id="rasterAnalyzeBtn" class="primary-btn w-full">วิเคราะห์และแสดงราสเตอร์</button>
+            <button id="rasterDemoBtn" class="secondary-btn w-full">โหลดราสเตอร์ตัวอย่าง</button>
+            <label class="secondary-btn flex cursor-pointer items-center justify-center">
+              นำเข้า JSON จากแบ็กเอนด์
+              <input id="rasterJsonUpload" type="file" accept="application/json" class="hidden" />
+            </label>
+            <p id="rasterStatus" class="text-sm text-slate-500">พร้อมแสดงชั้นข้อมูลราสเตอร์ NDVI/LST</p>
+          </section>
+
+          <section class="space-y-3">
+            <h2 class="text-sm font-bold text-slate-950">สเกลสี</h2>
+            <div class="scale-card">
+              <div class="flex justify-between text-xs font-bold text-slate-600"><span>NDVI ต่ำ</span><span>NDVI สูง</span></div>
+              <div class="ndvi-gradient"></div>
+            </div>
+            <div class="scale-card">
+              <div class="flex justify-between text-xs font-bold text-slate-600"><span>LST เย็น</span><span>LST ร้อน</span></div>
+              <div class="lst-gradient"></div>
+            </div>
+          </section>
+        </div>
+      </aside>
+
+      <main class="relative min-h-[72vh] lg:min-h-screen">
+        <div id="rasterMap" class="absolute inset-0"></div>
+        <div class="map-toolbar">
+          <div>
+            <p class="eyebrow">มุมมองราสเตอร์</p>
+            <p id="rasterSubtitle" class="text-sm font-semibold text-slate-950">ชั้นข้อมูล NDVI ของพืชบนภาพแผนที่</p>
+          </div>
+          <div class="legend">
+            <span><i class="pin-dot bg-emerald-500"></i> พืชสมบูรณ์</span>
+            <span><i class="pin-dot bg-amber-500"></i> เครียดจากความร้อน</span>
+            <span><i class="pin-dot bg-red-500"></i> ผิดปกติ</span>
+          </div>
+        </div>
+        <div class="map-status-card">
+          <span class="status-dot heat"></span>
+          <div>
+            <p class="text-xs font-bold uppercase tracking-wide text-slate-500">ขั้นตอนชั้นข้อมูล</p>
+            <p class="text-sm font-semibold text-slate-900">สลับดู NDVI, LST หรือความเสี่ยงผิดปกติ</p>
+          </div>
+        </div>
+        <button id="rasterMobilePanelBtn" class="mobile-panel-btn">ชั้นข้อมูล</button>
+      </main>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script src="/static/raster.js?v=20260624-result-display"></script>
+  </body>
+</html>
