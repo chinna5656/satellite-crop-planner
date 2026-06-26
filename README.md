@@ -184,3 +184,45 @@ docs/
 - ตั้ง `CROP_API_DOCS_ENABLED=false` ถ้าไม่ต้องการเปิดเอกสาร API สาธารณะ
 - เพิ่ม `CROP_API_MAX_RESPONSE_PIXELS` เฉพาะเมื่อ client รองรับ JSON raster ขนาดใหญ่ได้
 "# satellite-crop-planner" 
+
+## k6 Web Test
+
+Install k6 first: https://grafana.com/docs/k6/latest/set-up/install-k6/
+
+Start the FastAPI app, then run a web smoke/load test:
+
+```powershell
+.\scripts\run-k6.ps1
+```
+
+Command Prompt:
+
+```bat
+scripts\run-k6.bat
+```
+
+Custom target and load:
+
+```powershell
+.\scripts\run-k6.ps1 -BaseUrl http://127.0.0.1:8000 -Vus 10 -Duration 1m
+```
+
+The default test checks `/`, `/raster`, `/api/health`, and static frontend assets.
+
+To also test the heavier satellite analysis endpoints:
+
+```powershell
+.\scripts\run-k6.ps1 -RunAnalysis -Duration 1m
+```
+
+The same options are available in Command Prompt through environment variables:
+
+```bat
+set BASE_URL=http://127.0.0.1:8000
+set CROP_K6_VUS=10
+set CROP_K6_DURATION=1m
+set RUN_ANALYSIS=1
+scripts\run-k6.bat
+```
+
+The k6 script writes `k6-summary.json` after each run.

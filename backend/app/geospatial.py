@@ -417,12 +417,12 @@ def create_planetary_computer_ndvi_tile_url(item: Item, collection: str) -> str:
 
 def _bbox_from_polygon_coordinates(polygon_coordinates: list) -> list[float]:
     try:
-        ring = polygon_coordinates[0]
+        ring = _normalize_polygon_ring(polygon_coordinates)
         longitudes = [float(point[0]) for point in ring]
         latitudes = [float(point[1]) for point in ring]
     except Exception as exc:
         raise ImageryProcessingError(
-            "polygon_coordinates must be GeoJSON Polygon coordinates in lon/lat order."
+            "polygon_coordinates must be GeoJSON Polygon coordinates or a coordinate ring in lon/lat order."
         ) from exc
 
     min_lon, max_lon = min(longitudes), max(longitudes)
@@ -430,6 +430,31 @@ def _bbox_from_polygon_coordinates(polygon_coordinates: list) -> list[float]:
     if not (-180 <= min_lon < max_lon <= 180 and -90 <= min_lat < max_lat <= 90):
         raise ImageryProcessingError("Polygon coordinates are outside valid WGS84 bounds.")
     return [min_lon, min_lat, max_lon, max_lat]
+
+
+def _normalize_polygon_ring(polygon_coordinates: list) -> list:
+    """Accept either GeoJSON Polygon coordinates or a single linear ring."""
+
+    if not polygon_coordinates:
+        raise ValueError("Empty polygon coordinates.")
+
+    first = polygon_coordinates[0]
+    if _looks_like_coordinate_pair(first):
+        return polygon_coordinates
+
+    if isinstance(first, list) and first and _looks_like_coordinate_pair(first[0]):
+        return first
+
+    raise ValueError("Unsupported polygon coordinate structure.")
+
+
+def _looks_like_coordinate_pair(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) >= 2
+        and isinstance(value[0], (int, float))
+        and isinstance(value[1], (int, float))
+    )
 
 
 def _required_summary_mean(summary: RasterSummary, label: str) -> float:

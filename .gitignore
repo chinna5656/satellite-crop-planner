@@ -18,6 +18,7 @@ venv/
 
 # Logs and temporary files
 *.log
+k6-summary.json
 tmp/
 temp/
 
