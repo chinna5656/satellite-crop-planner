@@ -4,6 +4,7 @@ import math
 import re
 import urllib.request
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ LOCAL_AI_FEATURE_ORDER = ["ndwi", "ndvi", "lst_celsius", "chirps_30d_mm"]
 @dataclass(frozen=True)
 class AnalysisInputs:
     bbox: list[float]
+    polygon: dict[str, Any]
     time_range: str
     rainfall_15d_mm: float
 
@@ -320,6 +322,11 @@ def _validated_float(value: float, field_name: str) -> float:
     return parsed
 
 
+def _parse_stac_date(value: str) -> date:
+    date_text = value.split("T", 1)[0]
+    return datetime.strptime(date_text, "%Y-%m-%d").date()
+
+
 class StandardNDWILSTM:
     """Small default PyTorch LSTM used until the final model architecture is supplied."""
 
@@ -357,20 +364,22 @@ def analyze_field_with_planetary_computer(
 ) -> dict[str, float | str]:
     """Return stress statistics and an NDVI tile URL from Microsoft Planetary Computer."""
 
-    bbox = _bbox_from_polygon_coordinates(polygon_coordinates)
+    polygon_ring = _normalize_polygon_ring(polygon_coordinates)
+    bbox = _bbox_from_polygon_coordinates(polygon_ring)
+    polygon = {"type": "Polygon", "coordinates": [polygon_ring]}
     time_range = f"{start_date}/{end_date}"
     service = CropAnalysisService(settings)
 
-    sentinel_items = service._search_sentinel(bbox, time_range)
+    sentinel_items = service._search_sentinel(polygon, time_range)
 
-    sentinel_cube = service._load_sentinel_index_cube(sentinel_items, bbox)
+    sentinel_cube = service._load_sentinel_index_cube(sentinel_items, bbox, polygon)
     ndvi_cube = service._calculate_ndvi(sentinel_cube)
     ndwi_cube = service._calculate_ndwi(sentinel_cube)
     current_ndvi = ndvi_cube.isel(time=-1)
     current_ndwi = ndwi_cube.isel(time=-1)
     try:
-        landsat_items = service._search_landsat(bbox, time_range)
-        lst = service._calculate_lst_celsius(landsat_items, bbox, current_ndvi)
+        landsat_items = service._search_landsat(polygon, time_range)
+        lst = service._calculate_lst_celsius(landsat_items, bbox, polygon, current_ndvi)
     except CropAnalysisError:
         lst = xr.full_like(current_ndvi, np.nan).rio.write_crs(WGS84)
 
@@ -471,9 +480,13 @@ class CropAnalysisService:
         self.client = Client.open(settings.planetary_computer_stac_url)
 
     def analyze(self, inputs: AnalysisInputs) -> AnalyzeFieldResponse:
-        sentinel_items = self._search_sentinel(inputs.bbox, inputs.time_range)
+        sentinel_items = self._search_sentinel(inputs.polygon, inputs.time_range)
 
-        sentinel_cube = self._load_sentinel_cube(sentinel_items, inputs.bbox)
+        sentinel_cube = self._load_sentinel_cube(
+            sentinel_items,
+            inputs.bbox,
+            inputs.polygon,
+        )
         ndvi_cube = self._calculate_ndvi(sentinel_cube)
         current_ndvi = ndvi_cube.isel(time=-1)
         ndvi_diff = self._calculate_first_order_ndvi_difference(ndvi_cube)
@@ -481,8 +494,13 @@ class CropAnalysisService:
         landsat_items: list[Item] = []
         lst_error: str | None = None
         try:
-            landsat_items = self._search_landsat(inputs.bbox, inputs.time_range)
-            lst = self._calculate_lst_celsius(landsat_items, inputs.bbox, current_ndvi)
+            landsat_items = self._search_landsat(inputs.polygon, inputs.time_range)
+            lst = self._calculate_lst_celsius(
+                landsat_items,
+                inputs.bbox,
+                inputs.polygon,
+                current_ndvi,
+            )
         except CropAnalysisError as exc:
             lst_error = str(exc)
             lst = xr.full_like(current_ndvi, np.nan).rio.write_crs(WGS84)
@@ -516,39 +534,41 @@ class CropAnalysisService:
             pixels=pixels,
         )
 
-    def _search_sentinel(self, bbox: list[float], time_range: str) -> list[Item]:
+    def _search_sentinel(self, polygon: dict[str, Any], time_range: str) -> list[Item]:
         """Find cloud-filtered Sentinel-2 L2A scenes over the requested field."""
 
         items = self._search_cloud_filtered_items(
             collection=self.settings.sentinel_collection,
-            bbox=bbox,
+            polygon=polygon,
             time_range=time_range,
             max_items=self.settings.max_sentinel_items,
+            allow_time_expansion=False,
         )
         if not items:
             raise ImageryNotFoundError(
                 "No Sentinel-2 L2A images found with cloud cover under "
-                f"{self.settings.relaxed_max_cloud_cover}% for the requested bbox/time_range."
+                f"{self.settings.relaxed_max_cloud_cover}% for the requested polygon/time_range."
             )
         return [planetary_computer.sign(item) for item in items]
 
-    def _search_landsat(self, bbox: list[float], time_range: str) -> list[Item]:
+    def _search_landsat(self, polygon: dict[str, Any], time_range: str) -> list[Item]:
         """Find Landsat Collection 2 Level-1 scenes with thermal Band 10 metadata."""
 
         items = [
             item
             for item in self._search_cloud_filtered_items(
                 collection=self.settings.landsat_collection,
-                bbox=bbox,
+                polygon=polygon,
                 time_range=time_range,
                 max_items=self.settings.max_landsat_items,
+                allow_time_expansion=True,
             )
             if LANDSAT_TIRS_BAND_10 in item.assets
         ]
         if not items:
             raise ImageryNotFoundError(
                 "No Landsat 8/9 Level-1 scenes with TIRS Band 10 found for the requested "
-                "bbox/time_range and cloud filter."
+                "polygon/time_range after cloud and time-window fallbacks."
             )
         return [planetary_computer.sign(item) for item in items]
 
@@ -556,31 +576,40 @@ class CropAnalysisService:
         self,
         *,
         collection: str,
-        bbox: list[float],
+        polygon: dict[str, Any],
         time_range: str,
         max_items: int,
+        allow_time_expansion: bool,
     ) -> list[Item]:
-        """Search first with the strict cloud threshold, then retry with a relaxed threshold."""
+        """Search by polygon, then relax cloud cover and optionally expand dates."""
 
-        thresholds = [self.settings.max_cloud_cover]
-        if self.settings.relaxed_max_cloud_cover > self.settings.max_cloud_cover:
-            thresholds.append(self.settings.relaxed_max_cloud_cover)
+        thresholds = self._cloud_thresholds()
+        time_ranges = [time_range]
+        if allow_time_expansion:
+            time_ranges.append(self._expand_time_range(time_range, days=15))
+            time_ranges.append(self._expand_time_range(time_range, days=30))
 
-        for threshold in thresholds:
-            search = self.client.search(
-                collections=[collection],
-                bbox=bbox,
-                datetime=time_range,
-                query={"eo:cloud_cover": {"lt": threshold}},
-                sortby=[{"field": "properties.datetime", "direction": "asc"}],
-                max_items=max_items,
-            )
-            items = list(search.items())
-            if items:
-                return items
+        for search_time_range in dict.fromkeys(time_ranges):
+            for threshold in thresholds:
+                search = self.client.search(
+                    collections=[collection],
+                    intersects=polygon,
+                    datetime=search_time_range,
+                    query={"eo:cloud_cover": {"lt": threshold}},
+                    sortby=[{"field": "properties.datetime", "direction": "asc"}],
+                    max_items=max_items,
+                )
+                items = list(search.items())
+                if items:
+                    return items
         return []
 
-    def _load_sentinel_cube(self, items: list[Item], bbox: list[float]) -> xr.Dataset:
+    def _load_sentinel_cube(
+        self,
+        items: list[Item],
+        bbox: list[float],
+        polygon: dict[str, Any],
+    ) -> xr.Dataset:
         """Load Red and NIR bands at 10 m in the scenes' native projected grid."""
 
         try:
@@ -597,9 +626,14 @@ class CropAnalysisService:
 
         if SENTINEL_RED_BAND not in cube or SENTINEL_NIR_BAND not in cube:
             raise ImageryProcessingError("Sentinel-2 response is missing B04 or B08 assets.")
-        return cube
+        return self._clip_dataset_to_polygon(cube, polygon, "Sentinel-2 imagery")
 
-    def _load_sentinel_index_cube(self, items: list[Item], bbox: list[float]) -> xr.Dataset:
+    def _load_sentinel_index_cube(
+        self,
+        items: list[Item],
+        bbox: list[float],
+        polygon: dict[str, Any],
+    ) -> xr.Dataset:
         """Load Sentinel-2 Green, Red, and NIR bands for NDWI/NDVI stress analysis."""
 
         try:
@@ -617,7 +651,7 @@ class CropAnalysisService:
         required_bands = {SENTINEL_GREEN_BAND, SENTINEL_RED_BAND, SENTINEL_NIR_BAND}
         if not required_bands.issubset(cube.data_vars):
             raise ImageryProcessingError("Sentinel-2 response is missing B03, B04, or B08 assets.")
-        return cube
+        return self._clip_dataset_to_polygon(cube, polygon, "Sentinel-2 stress imagery")
 
     def _calculate_ndvi(self, cube: xr.Dataset) -> xr.DataArray:
         """Compute NDVI = (NIR - Red) / (NIR + Red), then reproject to EPSG:4326."""
@@ -650,6 +684,7 @@ class CropAnalysisService:
         self,
         landsat_items: list[Item],
         bbox: list[float],
+        polygon: dict[str, Any],
         ndvi_reference: xr.DataArray,
     ) -> xr.DataArray:
         """Convert Landsat TIRS Band 10 DN to LST Celsius and align it to the NDVI grid."""
@@ -673,6 +708,11 @@ class CropAnalysisService:
         except Exception as exc:
             raise ImageryProcessingError(f"Could not load Landsat thermal imagery: {exc}") from exc
 
+        thermal_cube = self._clip_dataset_to_polygon(
+            thermal_cube,
+            polygon,
+            "Landsat thermal imagery",
+        )
         dn = thermal_cube[LANDSAT_TIRS_BAND_10].isel(time=0).astype("float32")
         dn = xr.where(dn > 0, dn, np.nan)
         radiance = (float(radiance_mult) * dn) + float(radiance_add)
@@ -687,7 +727,53 @@ class CropAnalysisService:
             emissivity_on_thermal_grid,
         )
         lst_celsius = (lst_kelvin - 273.15).rio.write_crs(thermal_cube.odc.crs)
-        return lst_celsius.rio.reproject_match(ndvi_reference)
+        lst_celsius = lst_celsius.rio.reproject_match(ndvi_reference)
+        return self._clip_dataarray_to_polygon(lst_celsius, polygon, "Landsat LST")
+
+    def _clip_dataset_to_polygon(
+        self,
+        dataset: xr.Dataset,
+        polygon: dict[str, Any],
+        label: str,
+    ) -> xr.Dataset:
+        try:
+            if dataset.rio.crs is None and getattr(dataset, "odc", None) is not None:
+                dataset = dataset.rio.write_crs(dataset.odc.crs)
+            return dataset.rio.clip([polygon], crs=WGS84, drop=True)
+        except Exception as exc:
+            raise ImageryProcessingError(f"Could not clip {label} to polygon: {exc}") from exc
+
+    def _clip_dataarray_to_polygon(
+        self,
+        data: xr.DataArray,
+        polygon: dict[str, Any],
+        label: str,
+    ) -> xr.DataArray:
+        try:
+            if data.rio.crs is None:
+                data = data.rio.write_crs(WGS84)
+            return data.rio.clip([polygon], crs=WGS84, drop=True)
+        except Exception as exc:
+            raise ImageryProcessingError(f"Could not clip {label} to polygon: {exc}") from exc
+
+    def _cloud_thresholds(self) -> list[float]:
+        thresholds = [
+            self.settings.max_cloud_cover,
+            30.0,
+            self.settings.relaxed_max_cloud_cover,
+        ]
+        return sorted({threshold for threshold in thresholds if 0.0 <= threshold <= 100.0})
+
+    @staticmethod
+    def _expand_time_range(time_range: str, days: int) -> str:
+        try:
+            start_text, end_text = time_range.split("/", 1)
+            start = _parse_stac_date(start_text)
+            end = _parse_stac_date(end_text)
+        except Exception:
+            return time_range
+
+        return f"{(start - timedelta(days=days)).isoformat()}/{(end + timedelta(days=days)).isoformat()}"
 
     @staticmethod
     def _estimate_surface_emissivity(ndvi: xr.DataArray) -> xr.DataArray:

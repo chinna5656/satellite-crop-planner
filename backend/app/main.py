@@ -216,6 +216,7 @@ def analyze_field(
         analysis = service.analyze(
             AnalysisInputs(
                 bbox=request.bbox,
+                polygon=request.polygon,
                 time_range=str(request.time_range),
                 rainfall_15d_mm=rainfall_15d_mm,
             )

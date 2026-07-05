@@ -55,19 +55,83 @@ python -m pip install -r backend\requirements.txt
 
 ## ตัวอย่าง Request
 
+Use the GeoJSON Polygon example in the next section for current dashboard analysis requests.
+
+`rainfall_15d_mm` เป็น metadata ทางเลือก ถ้าไม่ส่งมา API จะใช้ค่า `CROP_API_DEFAULT_RAINFALL_MM_15D` ซึ่งค่าเริ่มต้นคือ `0`
+
+## Current Polygon Request Shape
+
+`POST /api/analyze-field` accepts GeoJSON Polygon input. `bbox` remains supported only as a backward-compatible fallback.
+
 ```bash
 curl -X POST http://127.0.0.1:8000/api/analyze-field \
   -H "Content-Type: application/json" \
   -d '{
-    "bbox": [100.45, 13.65, 100.55, 13.75],
-    "time_range": "2025-05-01/2025-06-01",
-    "rainfall_15d_mm": 42
+    "polygon": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [100.521, 14.215],
+          [100.5215, 14.215],
+          [100.5215, 14.2155],
+          [100.521, 14.2155],
+          [100.521, 14.215]
+        ]
+      ]
+    },
+    "start_date": "2025-01-01",
+    "end_date": "2025-02-28",
+    "rainfall_15d_mm": 10.0
   }'
 ```
 
-`rainfall_15d_mm` เป็น metadata ทางเลือก ถ้าไม่ส่งมา API จะใช้ค่า `CROP_API_DEFAULT_RAINFALL_MM_15D` ซึ่งค่าเริ่มต้นคือ `0`
+The request model normalizes this into:
+
+- `polygon`: closed GeoJSON Polygon in WGS84 lon/lat order
+- `bbox`: derived `[min_lon, min_lat, max_lon, max_lat]` load window
+- `time_range`: derived from `start_date` and `end_date` when omitted
 
 ## Pipeline
+
+Current polygon-first behavior:
+
+- Pydantic validates and normalizes the incoming polygon.
+- STAC search uses `intersects=polygon` for Sentinel-2 and Landsat.
+- `bbox` is used only as the efficient `odc.stac.load` window.
+- Sentinel-2 rasters are clipped to the polygon before NDVI calculation.
+- Landsat thermal rasters are clipped to the polygon before LST calculation.
+- Landsat search relaxes cloud cover thresholds and expands the time range by 15 and 30 days before giving up.
+- If Landsat/LST is missing, the API still returns NDVI, anomaly pixels, and `lst_status="missing"`.
+
+LST response contract when available:
+
+```json
+{
+  "lst_summary": {
+    "mean": 31.2,
+    "min": 27.4,
+    "max": 36.9,
+    "valid_pixel_count": 120
+  },
+  "lst_status": "available",
+  "lst_error": null
+}
+```
+
+LST response contract when missing:
+
+```json
+{
+  "lst_summary": {
+    "mean": null,
+    "min": null,
+    "max": null,
+    "valid_pixel_count": 0
+  },
+  "lst_status": "missing",
+  "lst_error": "No Landsat 8/9 Level-1 scenes with TIRS Band 10 found for the requested polygon/time_range after cloud and time-window fallbacks."
+}
+```
 
 - ค้นหา Sentinel-2 L2A จาก Planetary Computer STAC โดยใช้ `eo:cloud_cover < 10`
 - โหลดแบนด์ Red `B04` และ NIR `B08` ที่ความละเอียด 10 เมตร

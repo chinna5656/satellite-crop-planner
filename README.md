@@ -185,6 +185,67 @@ docs/
 - เพิ่ม `CROP_API_MAX_RESPONSE_PIXELS` เฉพาะเมื่อ client รองรับ JSON raster ขนาดใหญ่ได้
 "# satellite-crop-planner" 
 
+## Polygon Analysis API Update
+
+`POST /api/analyze-field` is now polygon-first. The frontend sends a GeoJSON Polygon, and the backend:
+
+- validates and normalizes the polygon with Pydantic
+- derives a bbox only as an efficient raster load window
+- searches Microsoft Planetary Computer STAC with `intersects=polygon`
+- loads Sentinel-2 and Landsat assets with `odc.stac`
+- clips rasters to the exact polygon with `rioxarray.rio.clip`
+- returns the normalized `polygon` in the response for map display
+
+Example request:
+
+```json
+{
+  "polygon": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [100.521, 14.215],
+        [100.5215, 14.215],
+        [100.5215, 14.2155],
+        [100.521, 14.2155],
+        [100.521, 14.215]
+      ]
+    ]
+  },
+  "start_date": "2025-01-01",
+  "end_date": "2025-02-28",
+  "rainfall_15d_mm": 10.0
+}
+```
+
+`bbox` is still accepted for compatibility. If only `bbox` is sent, the backend creates a rectangular polygon from it.
+
+## LST Fallback Behavior
+
+LST is optional. If Landsat 8/9 Level-1 scenes with TIRS Band 10 are unavailable, or LST conversion returns no valid pixels after polygon clipping, the API still returns NDVI and anomaly results.
+
+Missing LST response fields:
+
+```json
+{
+  "lst_summary": {
+    "mean": null,
+    "min": null,
+    "max": null,
+    "valid_pixel_count": 0
+  },
+  "lst_status": "missing",
+  "lst_error": "Reason from backend",
+  "pixels": [
+    {
+      "lst_celsius": null
+    }
+  ]
+}
+```
+
+The frontend displays `-- °C` for missing LST and shows the `lst_status` or `lst_error` reason under the Avg LST KPI.
+
 ## k6 Web Test
 
 Install k6 first: https://grafana.com/docs/k6/latest/set-up/install-k6/

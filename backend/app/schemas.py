@@ -87,10 +87,23 @@ class AnalyzeFieldRequest(BaseModel):
         }
 
     @staticmethod
-    def _derive_bbox_from_coordinates(coordinates: list) -> list[float]:
-        ring = coordinates[0] if coordinates and isinstance(coordinates[0], list) else []
+    def _normalize_polygon_coordinates(coordinates: list) -> list:
+        if not coordinates:
+            raise ValueError("GeoJSON Polygon coordinates cannot be empty.")
+
+        first = coordinates[0]
+        if (
+            isinstance(first, (list, tuple))
+            and len(first) >= 2
+            and isinstance(first[0], (int, float))
+            and isinstance(first[1], (int, float))
+        ):
+            ring = coordinates
+        else:
+            ring = first
+
         points = [
-            point
+            [float(point[0]), float(point[1])]
             for point in ring
             if isinstance(point, (list, tuple))
             and len(point) >= 2
@@ -99,6 +112,14 @@ class AnalyzeFieldRequest(BaseModel):
         ]
         if len(points) < 3:
             raise ValueError("GeoJSON Polygon coordinates must contain at least three lon/lat points.")
+
+        if points[0] != points[-1]:
+            points.append(points[0])
+        return [points]
+
+    @staticmethod
+    def _derive_bbox_from_coordinates(coordinates: list) -> list[float]:
+        points = AnalyzeFieldRequest._normalize_polygon_coordinates(coordinates)[0]
 
         lon_values = [float(point[0]) for point in points]
         lat_values = [float(point[1]) for point in points]
@@ -127,25 +148,26 @@ class AnalyzeFieldRequest(BaseModel):
 
     @model_validator(mode="after")
     def normalize_time_range(self) -> "AnalyzeFieldRequest":
+        coordinates = self.coordinates
+        geometry = self.geometry or self.polygon
+        if geometry:
+            if geometry.get("type") != "Polygon":
+                raise ValueError("geometry must be a GeoJSON Polygon.")
+            coordinates = geometry.get("coordinates")
+
         if self.bbox is None:
-            coordinates = self.coordinates
-            geometry = self.geometry or self.polygon
-            if geometry:
-                if geometry.get("type") != "Polygon":
-                    raise ValueError("geometry must be a GeoJSON Polygon.")
-                coordinates = geometry.get("coordinates")
             if coordinates:
                 self.bbox = self._derive_bbox_from_coordinates(coordinates)
             else:
                 raise ValueError("Send bbox or a GeoJSON Polygon geometry.")
 
-        if self.polygon is None:
-            if self.geometry and self.geometry.get("type") == "Polygon":
-                self.polygon = self.geometry
-            elif self.coordinates:
-                self.polygon = {"type": "Polygon", "coordinates": self.coordinates}
-            elif self.bbox:
-                self.polygon = self._bbox_to_polygon(self.bbox)
+        if coordinates:
+            self.polygon = {
+                "type": "Polygon",
+                "coordinates": self._normalize_polygon_coordinates(coordinates),
+            }
+        elif self.bbox:
+            self.polygon = self._bbox_to_polygon(self.bbox)
 
         if self.time_range:
             start_date, end_date = self.time_range.split("/", 1)
