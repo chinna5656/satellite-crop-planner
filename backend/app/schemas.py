@@ -15,9 +15,30 @@ BBox = Annotated[
 
 
 class AnalyzeFieldRequest(BaseModel):
-    bbox: BBox
-    time_range: str = Field(
+    bbox: BBox | None = None
+    polygon: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional GeoJSON Polygon geometry. Used to derive bbox when bbox is omitted.",
+    )
+    geometry: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional GeoJSON geometry. Used to derive bbox when bbox is omitted.",
+    )
+    coordinates: list | None = Field(
+        default=None,
+        description="Optional GeoJSON Polygon coordinates. Used to derive bbox when bbox is omitted.",
+    )
+    time_range: str | None = Field(
+        default=None,
         description="STAC datetime interval, for example '2025-05-01/2025-06-01'."
+    )
+    start_date: str | None = Field(
+        default=None,
+        description="Optional start date in YYYY-MM-DD format. Used when time_range is omitted.",
+    )
+    end_date: str | None = Field(
+        default=None,
+        description="Optional end date in YYYY-MM-DD format. Used when time_range is omitted.",
     )
     rainfall_15d_mm: float | None = Field(
         default=None,
@@ -30,20 +51,113 @@ class AnalyzeFieldRequest(BaseModel):
 
     @field_validator("bbox")
     @classmethod
-    def validate_bbox(cls, bbox: list[float]) -> list[float]:
+    def validate_bbox(cls, bbox: list[float] | None) -> list[float] | None:
+        if bbox is None:
+            return bbox
         min_lon, min_lat, max_lon, max_lat = bbox
+        cls._validate_bbox_bounds(min_lon, min_lat, max_lon, max_lat)
+        return bbox
+
+    @staticmethod
+    def _validate_bbox_bounds(
+        min_lon: float,
+        min_lat: float,
+        max_lon: float,
+        max_lat: float,
+    ) -> None:
         if not (-180 <= min_lon < max_lon <= 180):
             raise ValueError("bbox longitude bounds must satisfy -180 <= min_lon < max_lon <= 180")
         if not (-90 <= min_lat < max_lat <= 90):
             raise ValueError("bbox latitude bounds must satisfy -90 <= min_lat < max_lat <= 90")
+
+    @staticmethod
+    def _bbox_to_polygon(bbox: list[float]) -> dict[str, Any]:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        return {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [min_lon, min_lat],
+                    [max_lon, min_lat],
+                    [max_lon, max_lat],
+                    [min_lon, max_lat],
+                    [min_lon, min_lat],
+                ]
+            ],
+        }
+
+    @staticmethod
+    def _derive_bbox_from_coordinates(coordinates: list) -> list[float]:
+        ring = coordinates[0] if coordinates and isinstance(coordinates[0], list) else []
+        points = [
+            point
+            for point in ring
+            if isinstance(point, (list, tuple))
+            and len(point) >= 2
+            and isinstance(point[0], (int, float))
+            and isinstance(point[1], (int, float))
+        ]
+        if len(points) < 3:
+            raise ValueError("GeoJSON Polygon coordinates must contain at least three lon/lat points.")
+
+        lon_values = [float(point[0]) for point in points]
+        lat_values = [float(point[1]) for point in points]
+        bbox = [min(lon_values), min(lat_values), max(lon_values), max(lat_values)]
+        AnalyzeFieldRequest._validate_bbox_bounds(*bbox)
         return bbox
 
     @field_validator("time_range")
     @classmethod
-    def validate_time_range(cls, value: str) -> str:
+    def validate_time_range(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         if "/" not in value:
             raise ValueError("time_range must be a STAC datetime interval like YYYY-MM-DD/YYYY-MM-DD")
         return value
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def validate_optional_date(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        parts = value.split("-")
+        if len(parts) != 3 or any(not part.isdigit() for part in parts):
+            raise ValueError("Dates must use YYYY-MM-DD format")
+        return value
+
+    @model_validator(mode="after")
+    def normalize_time_range(self) -> "AnalyzeFieldRequest":
+        if self.bbox is None:
+            coordinates = self.coordinates
+            geometry = self.geometry or self.polygon
+            if geometry:
+                if geometry.get("type") != "Polygon":
+                    raise ValueError("geometry must be a GeoJSON Polygon.")
+                coordinates = geometry.get("coordinates")
+            if coordinates:
+                self.bbox = self._derive_bbox_from_coordinates(coordinates)
+            else:
+                raise ValueError("Send bbox or a GeoJSON Polygon geometry.")
+
+        if self.polygon is None:
+            if self.geometry and self.geometry.get("type") == "Polygon":
+                self.polygon = self.geometry
+            elif self.coordinates:
+                self.polygon = {"type": "Polygon", "coordinates": self.coordinates}
+            elif self.bbox:
+                self.polygon = self._bbox_to_polygon(self.bbox)
+
+        if self.time_range:
+            start_date, end_date = self.time_range.split("/", 1)
+        elif self.start_date and self.end_date:
+            start_date, end_date = self.start_date, self.end_date
+            self.time_range = f"{start_date}/{end_date}"
+        else:
+            raise ValueError("Send either time_range or both start_date and end_date.")
+
+        if start_date > end_date:
+            raise ValueError("start_date must be before or equal to end_date")
+        return self
 
 
 class PixelResult(BaseModel):
@@ -65,12 +179,15 @@ class RasterSummary(BaseModel):
 
 class AnalyzeFieldResponse(BaseModel):
     bbox: list[float]
+    polygon: dict[str, Any] | None = None
     time_range: str
     crs: str
     sentinel_scene_ids: list[str]
     landsat_scene_ids: list[str]
     ndvi_summary: RasterSummary
     lst_summary: RasterSummary
+    lst_status: str = "unknown"
+    lst_error: str | None = None
     anomaly_count: int
     pixels: list[PixelResult]
 
@@ -84,19 +201,59 @@ class AnalyzeStressRequest(BaseModel):
         default=None,
         description="GeoJSON Polygon coordinates in WGS84 lon/lat order.",
     )
-    start_date: str = Field(description="Analysis start date in YYYY-MM-DD format.")
-    end_date: str = Field(description="Analysis end date in YYYY-MM-DD format.")
+    start_date: str | None = Field(
+        default=None,
+        description="Analysis start date in YYYY-MM-DD format.",
+    )
+    end_date: str | None = Field(
+        default=None,
+        description="Analysis end date in YYYY-MM-DD format.",
+    )
+    target_date: str | None = Field(
+        default=None,
+        description="Optional target date. The API looks back 30 days when start_date/end_date are omitted.",
+    )
+    time_range: str | None = Field(
+        default=None,
+        description="Optional STAC datetime interval, for example '2025-05-01/2025-06-01'.",
+    )
 
-    @field_validator("start_date", "end_date")
+    @field_validator("start_date", "end_date", "target_date")
     @classmethod
-    def validate_date(cls, value: str) -> str:
+    def validate_date(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         parts = value.split("-")
         if len(parts) != 3 or any(not part.isdigit() for part in parts):
             raise ValueError("Dates must use YYYY-MM-DD format")
         return value
 
+    @field_validator("time_range")
+    @classmethod
+    def validate_stress_time_range(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if "/" not in value:
+            raise ValueError("time_range must be a STAC datetime interval like YYYY-MM-DD/YYYY-MM-DD")
+        return value
+
     @model_validator(mode="after")
-    def validate_date_order(self) -> "AnalyzeStressRequest":
+    def normalize_dates(self) -> "AnalyzeStressRequest":
+        if self.start_date and self.end_date:
+            pass
+        elif self.time_range:
+            self.start_date, self.end_date = self.time_range.split("/", 1)
+        elif self.target_date:
+            year, month, day = [int(part) for part in self.target_date.split("-")]
+            from datetime import date, timedelta
+
+            end = date(year, month, day)
+            start = end - timedelta(days=30)
+            self.start_date = start.isoformat()
+            self.end_date = end.isoformat()
+        else:
+            raise ValueError("Send start_date/end_date, time_range, or target_date.")
+
         if self.start_date > self.end_date:
             raise ValueError("start_date must be before or equal to end_date")
         return self

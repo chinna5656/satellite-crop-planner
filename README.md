@@ -226,3 +226,7 @@ scripts\run-k6.bat
 ```
 
 The k6 script writes `k6-summary.json` after each run.
+
+## Data Transfer Workflow
+
+See [docs/data-transfer-workflow.md](docs/data-transfer-workflow.md) for the Leaflet-to-FastAPI-to-Planetary-Computer request/response workflow.

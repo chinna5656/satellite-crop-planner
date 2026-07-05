@@ -18,6 +18,7 @@ class Settings(BaseSettings):
             "http://localhost:8000",
             "http://127.0.0.1:5500",
             "http://localhost:5500",
+            "*",
         ]
     )
     allowed_hosts: list[str] = Field(default_factory=lambda: ["127.0.0.1", "localhost", "*"])

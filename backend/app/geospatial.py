@@ -378,7 +378,7 @@ def analyze_field_with_planetary_computer(
     ndvi_summary = service._summary(current_ndvi)
     ndwi_summary = service._summary(current_ndwi)
     lst_summary = service._summary(lst)
-
+    print(f"NDVI summary: {ndvi_summary}, NDWI summary: {ndwi_summary}, LST summary: {lst_summary}")
     tile_url = create_planetary_computer_ndvi_tile_url(
         sentinel_items[-1],
         settings.sentinel_collection,
@@ -479,14 +479,20 @@ class CropAnalysisService:
         ndvi_diff = self._calculate_first_order_ndvi_difference(ndvi_cube)
 
         landsat_items: list[Item] = []
+        lst_error: str | None = None
         try:
             landsat_items = self._search_landsat(inputs.bbox, inputs.time_range)
             lst = self._calculate_lst_celsius(landsat_items, inputs.bbox, current_ndvi)
-        except CropAnalysisError:
+        except CropAnalysisError as exc:
+            lst_error = str(exc)
             lst = xr.full_like(current_ndvi, np.nan).rio.write_crs(WGS84)
 
         current_ndvi, ndvi_diff, lst = xr.align(current_ndvi, ndvi_diff, lst, join="inner")
         anomaly_flags = self._detect_anomalies(current_ndvi, ndvi_diff, inputs.rainfall_15d_mm)
+        lst_summary = self._summary(lst)
+        lst_status = "available" if lst_summary.valid_pixel_count > 0 else "missing"
+        if lst_status == "missing" and lst_error is None:
+            lst_error = "LST calculation completed but returned no valid thermal pixels."
 
         pixels = self._serialize_pixels(
             current_ndvi=current_ndvi,
@@ -503,7 +509,9 @@ class CropAnalysisService:
             sentinel_scene_ids=[item.id for item in sentinel_items],
             landsat_scene_ids=[item.id for item in landsat_items],
             ndvi_summary=self._summary(current_ndvi),
-            lst_summary=self._summary(lst),
+            lst_summary=lst_summary,
+            lst_status=lst_status,
+            lst_error=lst_error,
             anomaly_count=int(np.nansum(anomaly_flags.values)),
             pixels=pixels,
         )

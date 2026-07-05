@@ -142,8 +142,8 @@ def analyze_stress(request: AnalyzeStressRequest) -> AnalyzeStressResponse:
         polygon_coordinates = request.polygon_coordinates()
         stress_stats = analyze_field_with_planetary_computer(
             polygon_coordinates,
-            request.start_date,
-            request.end_date,
+            str(request.start_date),
+            str(request.end_date),
             settings,
         )
         mean_ndvi = float(stress_stats["mean_ndvi"])
@@ -213,13 +213,15 @@ def analyze_field(
     )
 
     try:
-        return service.analyze(
+        analysis = service.analyze(
             AnalysisInputs(
                 bbox=request.bbox,
-                time_range=request.time_range,
+                time_range=str(request.time_range),
                 rainfall_15d_mm=rainfall_15d_mm,
             )
         )
+        analysis.polygon = request.polygon
+        return analysis
     except ImageryNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
