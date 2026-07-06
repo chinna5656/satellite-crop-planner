@@ -136,7 +136,7 @@ def api_routes() -> dict[str, list[str]]:
 @app.post("/api/analyze-stress", response_model=AnalyzeStressResponse)
 @app.post("/api/analyze-stress/", response_model=AnalyzeStressResponse, include_in_schema=False)
 def analyze_stress(request: AnalyzeStressRequest) -> AnalyzeStressResponse:
-    """Run Microsoft Planetary Computer field stress analysis and return a Leaflet tile URL."""
+    """Run Microsoft Planetary Computer field stress analysis for raster overlays."""
 
     try:
         polygon_coordinates = request.polygon_coordinates()
@@ -151,26 +151,92 @@ def analyze_stress(request: AnalyzeStressRequest) -> AnalyzeStressResponse:
         mean_lst_celsius = (
             float(raw_lst_celsius) if raw_lst_celsius is not None else None
         )
-        has_critical_heat = mean_lst_celsius is not None and mean_lst_celsius >= 38.0
-        has_watch_heat = mean_lst_celsius is not None and mean_lst_celsius >= 34.0
+        anomaly_count = int(stress_stats.get("anomaly_count", 0))
+        valid_pixel_count = int(stress_stats.get("valid_pixel_count", 0))
+        anomaly_ratio = (
+            float(stress_stats.get("anomaly_ratio", 0.0))
+            if valid_pixel_count
+            else 0.0
+        )
+        thermal_critical_pixel_count = int(
+            stress_stats.get("thermal_critical_pixel_count", 0)
+        )
+        thermal_watch_pixel_count = int(stress_stats.get("thermal_watch_pixel_count", 0))
+        thermal_valid_pixel_count = int(stress_stats.get("thermal_valid_pixel_count", 0))
+        thermal_critical_ratio = (
+            float(stress_stats.get("thermal_critical_ratio", 0.0))
+            if thermal_valid_pixel_count
+            else 0.0
+        )
+        thermal_watch_ratio = (
+            float(stress_stats.get("thermal_watch_ratio", 0.0))
+            if thermal_valid_pixel_count
+            else 0.0
+        )
+        has_critical_heat = (
+            thermal_critical_ratio >= 0.15
+            or thermal_critical_pixel_count >= 3
+            or (mean_lst_celsius is not None and mean_lst_celsius >= 38.0)
+        )
+        has_watch_heat = (
+            thermal_watch_ratio >= 0.05
+            or thermal_watch_pixel_count >= 1
+            or (mean_lst_celsius is not None and mean_lst_celsius >= 34.0)
+        )
 
-        if mean_ndvi < 0.35 or has_critical_heat:
+        if (
+            anomaly_ratio >= 0.15
+            or (anomaly_count >= 3 and mean_ndvi < 0.45)
+            or has_critical_heat
+        ):
             risk_level = "เสี่ยงรุนแรง"
-        elif mean_ndvi < 0.5 or has_watch_heat:
+        elif (
+            anomaly_ratio >= 0.05
+            or anomaly_count >= 1
+            or mean_ndvi < 0.5
+            or has_watch_heat
+        ):
             risk_level = "เฝ้าระวัง"
         else:
             risk_level = "ปกติ"
 
         return AnalyzeStressResponse(
             tile_url=str(stress_stats["tile_url"]),
+            tile_urls={
+                str(key): str(value)
+                for key, value in dict(stress_stats.get("tile_urls", {})).items()
+            },
             start_date=str(stress_stats["start_date"]),
             end_date=str(stress_stats["end_date"]),
             mean_ndvi=mean_ndvi,
             mean_ndwi=float(stress_stats["mean_ndwi"]),
             mean_lst_celsius=mean_lst_celsius,
+            lst_status=str(stress_stats.get("lst_status", "unknown")),
+            lst_error=(
+                str(stress_stats["lst_error"])
+                if stress_stats.get("lst_error") is not None
+                else None
+            ),
+            lst_source=(
+                str(stress_stats["lst_source"])
+                if stress_stats.get("lst_source") is not None
+                else None
+            ),
+            anomaly_count=anomaly_count,
+            anomaly_ratio=anomaly_ratio,
+            anomaly_model_features=[
+                str(feature)
+                for feature in stress_stats.get("anomaly_model_features", [])
+            ],
+            thermal_valid_pixel_count=thermal_valid_pixel_count,
+            thermal_critical_pixel_count=thermal_critical_pixel_count,
+            thermal_watch_pixel_count=thermal_watch_pixel_count,
+            thermal_critical_ratio=thermal_critical_ratio,
+            thermal_watch_ratio=thermal_watch_ratio,
             rainfall_30d_mm=float(stress_stats["rainfall_30d_mm"]),
             risk_level=risk_level,
-            pixel_count=str(stress_stats["pixel_count"]),
+            valid_pixel_count=valid_pixel_count,
+            pixel_count=valid_pixel_count,
             source=str(stress_stats.get("source", "Microsoft Planetary Computer")),
         )
     except ValueError as exc:

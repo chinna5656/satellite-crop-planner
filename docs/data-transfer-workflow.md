@@ -121,14 +121,15 @@ Frontend behavior:
 
 ## LST Fallback Behavior
 
-LST is optional. NDVI analysis should still succeed when Landsat thermal data is unavailable.
+LST is optional. NDVI analysis should still succeed when all thermal data is unavailable.
 
 The backend tries:
 
 1. Landsat search with configured cloud threshold.
 2. Relaxed threshold list including `30%` and `CROP_API_RELAXED_MAX_CLOUD_COVER`.
 3. Expanded time windows of plus/minus 15 and 30 days for Landsat only.
-4. If still missing, it returns successful NDVI results with:
+4. ECOSTRESS LST search with expanded windows if Landsat returns no usable pixels.
+5. If still missing, it returns successful NDVI results with:
 
 ```json
 {
@@ -139,6 +140,7 @@ The backend tries:
     "valid_pixel_count": 0
   },
   "lst_status": "missing",
+  "lst_source": "Sentinel-2 Only",
   "lst_error": "No Landsat 8/9 Level-1 scenes with TIRS Band 10 found for the requested polygon/time_range after cloud and time-window fallbacks.",
   "pixels": [
     {
@@ -165,7 +167,7 @@ If a micro-polygon has fewer than 8 valid pixels, Isolation Forest cannot fit re
 
 ## Raster Data Send
 
-The raster visualization page sends polygon coordinates and expects a tile URL for map overlay.
+The raster visualization page sends polygon coordinates and expects layer tile URLs for map overlay.
 
 Source file:
 
@@ -204,15 +206,33 @@ Expected response shape:
 ```json
 {
   "tile_url": "https://tiles.example/{z}/{x}/{y}.png",
+  "tile_urls": {
+    "ndvi": "https://tiles.example/ndvi/{z}/{x}/{y}.png",
+    "lst": "https://tiles.example/lst/{z}/{x}/{y}.png",
+    "anomaly": "https://tiles.example/anomaly/{z}/{x}/{y}.png"
+  },
   "mean_ndvi": 0.58,
   "mean_ndwi": 0.21,
-  "mean_lst_celsius": 32.4,
+  "mean_lst_celsius": null,
+  "lst_status": "missing",
+  "lst_error": "No Landsat thermal scene found after fallbacks.",
+  "anomaly_count": 7,
+  "anomaly_ratio": 0.1429,
   "rainfall_30d_mm": 0.0,
   "risk_level": "normal",
-  "pixel_count": "128 pixels",
+  "valid_pixel_count": 49,
+  "pixel_count": 49,
   "source": "Microsoft Planetary Computer"
 }
 ```
+
+Raster frontend behavior:
+
+1. Stores the returned payload as the active raster payload.
+2. Enables only layer buttons with a URL in `tile_urls`.
+3. Switches Leaflet overlays locally when the user clicks NDVI, LST, or anomaly.
+4. Shows `--` for null metrics such as missing `mean_lst_celsius`.
+5. Allows manual testing through a JSON file imported with the same response shape.
 
 ## Sequence Diagram
 
@@ -245,7 +265,7 @@ sequenceDiagram
 | `404 Not Found` | Frontend posts to the wrong route. | Check API base URL and endpoint path. |
 | `422 Unprocessable Entity` | Request body is not a valid GeoJSON polygon or date range. | Show validation message and inspect payload shape. |
 | No Sentinel-2 imagery | No usable vegetation imagery for polygon/date range. | Ask user to widen date range or change field. |
-| Missing Landsat LST | No TIRS Band 10 scene after cloud/time fallbacks, or LST conversion failed. | Keep NDVI results visible and show `lst_status: "missing"`. |
+| Missing Landsat LST | No TIRS Band 10 scene after cloud/time fallbacks, or LST conversion failed. | Keep NDVI results visible, return `mean_lst_celsius: null`, disable unavailable LST tiles, and show `lst_status: "missing"`. |
 | Tile overlay fails | Tile URL expired or raster service unavailable. | Keep KPI results visible and show tile warning. |
 | Empty pixel result | Backend processed summary but no displayable pixel list was returned. | Add field-level summary marker on the map. |
 

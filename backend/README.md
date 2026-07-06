@@ -101,7 +101,8 @@ Current polygon-first behavior:
 - Sentinel-2 rasters are clipped to the polygon before NDVI calculation.
 - Landsat thermal rasters are clipped to the polygon before LST calculation.
 - Landsat search relaxes cloud cover thresholds and expands the time range by 15 and 30 days before giving up.
-- If Landsat/LST is missing, the API still returns NDVI, anomaly pixels, and `lst_status="missing"`.
+- If Landsat has no usable thermal pixels, ECOSTRESS LST is searched with expanded windows and clipped to the same polygon.
+- If both Landsat and ECOSTRESS are missing, the API still returns NDVI, anomaly pixels, and `lst_status="missing"`.
 - The anomaly detector switches feature sets based on LST availability and reports the chosen set in `anomaly_model_features`.
 
 LST response contract when available:
@@ -115,6 +116,7 @@ LST response contract when available:
     "valid_pixel_count": 120
   },
   "lst_status": "available",
+  "lst_source": "Landsat 8/9 via Microsoft Planetary Computer",
   "lst_error": null
 }
 ```
@@ -130,6 +132,7 @@ LST response contract when missing:
     "valid_pixel_count": 0
   },
   "lst_status": "missing",
+  "lst_source": "Sentinel-2 Only",
   "lst_error": "No Landsat 8/9 Level-1 scenes with TIRS Band 10 found for the requested polygon/time_range after cloud and time-window fallbacks."
 }
 ```
@@ -142,6 +145,37 @@ Anomaly model feature sets:
 | Missing | `["ndvi", "ndvi_diff", "rainfall_15d_mm"]` |
 
 For very small polygons with fewer than 8 valid pixels, Isolation Forest does not fit, but rule-based anomaly guards still run for sharp NDVI drops under high rainfall and heat stress when LST is available.
+
+## Raster Stress Endpoint
+
+`POST /api/analyze-stress` powers the `/raster` page. It accepts a GeoJSON Polygon geometry or coordinates plus `start_date`/`end_date`, `time_range`, or `target_date`.
+
+The endpoint runs the Sentinel-2 NDVI/NDWI pipeline independently from the thermal pipeline. Landsat 8/9 is attempted first, ECOSTRESS is attempted second, and if both fail the response still succeeds with `mean_lst_celsius: null`, `lst_status: "missing"`, and a human-readable `lst_error`.
+
+Current response shape:
+
+```json
+{
+  "tile_url": "https://tiles.example/ndvi/{z}/{x}/{y}.png",
+  "tile_urls": {
+    "ndvi": "https://tiles.example/ndvi/{z}/{x}/{y}.png",
+    "anomaly": "https://tiles.example/anomaly/{z}/{x}/{y}.png"
+  },
+  "mean_ndvi": 0.58,
+  "mean_ndwi": 0.21,
+  "mean_lst_celsius": null,
+  "lst_status": "missing",
+  "lst_error": "No Landsat 8/9 Level-1 scenes with TIRS Band 10 found for the requested polygon/time_range after cloud and time-window fallbacks.",
+  "anomaly_count": 7,
+  "anomaly_ratio": 0.1429,
+  "risk_level": "normal",
+  "valid_pixel_count": 49,
+  "pixel_count": 49,
+  "source": "Microsoft Planetary Computer"
+}
+```
+
+When LST is available, `tile_urls.lst` may be included. Clients should treat `tile_urls` as the preferred layer map and keep `tile_url` only as a backward-compatible NDVI fallback.
 
 - ค้นหา Sentinel-2 L2A จาก Planetary Computer STAC โดยใช้ `eo:cloud_cover < 10`
 - โหลดแบนด์ Red `B04` และ NIR `B08` ที่ความละเอียด 10 เมตร

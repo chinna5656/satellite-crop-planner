@@ -1,10 +1,19 @@
 const ANALYZE_STRESS_URL = window.CROP_STRESS_API_URL || "/api/analyze-stress";
-const THAILAND_CENTER = [15.8700, 100.9925];
+const THAILAND_CENTER = [15.87, 100.9925];
 const THAILAND_ZOOM = 6;
 
 const rasterState = {
   drawnLayer: null,
+  polygon: null,
   rasterTileLayer: null,
+  activePayload: null,
+  activeLayer: "ndvi",
+};
+
+const layerLabels = {
+  ndvi: "NDVI",
+  lst: "LST",
+  anomaly: "Anomaly",
 };
 
 const rasterMap = L.map("rasterMap", {
@@ -55,8 +64,8 @@ rasterMap.addControl(drawControl);
 const rasterElements = {
   bbox: document.getElementById("rasterBbox"),
   analyze: document.getElementById("rasterAnalyzeBtn"),
-  demo: document.getElementById("rasterDemoBtn"),
-  upload: document.getElementById("rasterJsonUpload"),
+  manualCoords: document.getElementById("rasterManualCoordsInput"),
+  plotManualPolygon: document.getElementById("rasterPlotManualPolygonBtn"),
   startDate: document.getElementById("rasterStartDate"),
   endDate: document.getElementById("rasterEndDate"),
   status: document.getElementById("rasterStatus"),
@@ -75,47 +84,48 @@ rasterMap.on(L.Draw.Event.CREATED, (event) => {
   drawnItems.addLayer(rasterState.drawnLayer);
 
   const geojson = rasterState.drawnLayer.toGeoJSON();
-  rasterElements.bbox.textContent = JSON.stringify(geojson.geometry.coordinates, null, 2);
+  setActivePolygon(geojson.geometry);
   rasterMap.fitBounds(rasterState.drawnLayer.getBounds().pad(0.12));
-  setRasterStatus("บันทึกขอบเขตแปลงแล้ว กดวิเคราะห์เพื่อขอชั้นข้อมูลจาก Microsoft Planetary Computer");
+  setRasterStatus("Field saved. Click analyze to request raster layers.");
 });
 
 rasterMap.on(L.Draw.Event.EDITED, (event) => {
   event.layers.eachLayer((layer) => {
     rasterState.drawnLayer = layer;
     const geojson = layer.toGeoJSON();
-    rasterElements.bbox.textContent = JSON.stringify(geojson.geometry.coordinates, null, 2);
+    setActivePolygon(geojson.geometry);
   });
 });
 
 rasterMap.on(L.Draw.Event.DELETED, () => {
   rasterState.drawnLayer = null;
-  rasterElements.bbox.textContent = "ยังไม่ได้เลือกแปลง";
+  rasterState.polygon = null;
+  rasterState.activePayload = null;
+  setText(rasterElements.bbox, "No field selected");
   removeRasterOverlay();
-  setRasterStatus("ล้างขอบเขตแปลงแล้ว");
+  updateLayerButtons();
+  setRasterStatus("Field cleared.");
 });
 
 rasterElements.analyze?.addEventListener("click", analyzeStress);
+rasterElements.plotManualPolygon?.addEventListener("click", plotManualPolygon);
 rasterElements.mobilePanel?.addEventListener("click", () => {
   rasterElements.sidebar.classList.toggle("open");
   setTimeout(() => rasterMap.invalidateSize(), 260);
 });
 
-// Old raster-cell controls are optional on the page. They are hidden because this
-// script renders Microsoft Planetary Computer tiles instead of local rectangle cells.
-rasterElements.demo?.classList.add("hidden");
-rasterElements.upload?.closest("label")?.classList.add("hidden");
 document.querySelectorAll(".layer-toggle").forEach((button) => {
-  button.disabled = true;
-  button.title = "รูปแบบชั้นข้อมูลถูกกำหนดจากผลลัพธ์ Microsoft Planetary Computer";
+  button.disabled = false;
+  button.addEventListener("click", () => selectRasterLayer(button.dataset.layer));
 });
 
 window.addEventListener("resize", () => rasterMap.invalidateSize());
-setRasterStatus("วาดรูปหลายเหลี่ยมหรือสี่เหลี่ยมหนึ่งแปลงในประเทศไทย");
+setRasterStatus("Draw a polygon or enter coordinates, then analyze live data.");
+updateLayerButtons();
 
 async function analyzeStress() {
-  if (!rasterState.drawnLayer) {
-    setRasterStatus("กรุณาวาดรูปหลายเหลี่ยมหรือสี่เหลี่ยมก่อนเริ่มวิเคราะห์", true);
+  if (!rasterState.polygon) {
+    setRasterStatus("Please draw a polygon, rectangle, or plot manual coordinates before analysis.", true);
     return;
   }
 
@@ -127,17 +137,16 @@ async function analyzeStress() {
     return;
   }
 
-  const geojson = rasterState.drawnLayer.toGeoJSON();
   const requestBody = {
-    geometry: geojson.geometry,
-    coordinates: geojson.geometry.coordinates,
+    geometry: rasterState.polygon,
+    coordinates: rasterState.polygon.coordinates,
     start_date: dates.startDate,
     end_date: dates.endDate,
   };
 
   rasterElements.analyze.disabled = true;
-  rasterElements.analyze.textContent = "กำลังวิเคราะห์...";
-  setRasterStatus("กำลังส่งขอบเขตแปลงไปยัง API วิเคราะห์ Microsoft Planetary Computer...");
+  rasterElements.analyze.textContent = "Analyzing...";
+  setRasterStatus("Requesting raster layers from the backend...");
 
   try {
     const response = await fetch(ANALYZE_STRESS_URL, {
@@ -150,33 +159,106 @@ async function analyzeStress() {
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(payload.detail || payload.message || `การวิเคราะห์ล้มเหลวด้วย HTTP ${response.status}`);
-    }
-    if (!payload.tile_url) {
-      throw new Error("ผลลัพธ์ API ไม่มี tile_url");
+      throw new Error(formatApiDetail(payload.detail || payload.message || `Analysis failed with HTTP ${response.status}`));
     }
 
-    addRasterTileOverlay(payload.tile_url);
-    updateSummaryCards(payload);
-    setRasterStatus(
-      `เพิ่มชั้นข้อมูลจาก ${payload.source || "Microsoft Planetary Computer"} แล้ว`,
-    );
+    renderRasterPayload(payload);
+    setRasterStatus(`Loaded raster layers from ${payload.source || "Microsoft Planetary Computer"}.`);
   } catch (error) {
     removeRasterOverlay();
-    setRasterStatus(
-      `${error.message} กรุณาตรวจสอบว่า route /api/analyze-stress ของแบ็กเอนด์ทำงานและส่งคืน { "tile_url": "..." }`,
-      true,
-    );
+    setRasterStatus(`${error.message}. Check /api/analyze-stress and the returned tile_urls.`, true);
   } finally {
     rasterElements.analyze.disabled = false;
-    rasterElements.analyze.textContent = "วิเคราะห์และแสดงราสเตอร์";
+    rasterElements.analyze.textContent = "Analyze and show raster";
   }
 }
 
-function addRasterTileOverlay(tileUrl) {
+function renderRasterPayload(payload) {
+  const normalizedPayload = normalizeRasterPayload(payload);
+  const hasAnyTile = Object.keys(normalizedPayload.tile_urls).length > 0;
+  if (!hasAnyTile) {
+    throw new Error("Result has no tile_url or tile_urls.");
+  }
+
+  rasterState.activePayload = normalizedPayload;
+  updateLayerToggleAvailability(normalizedPayload);
+
+  const preferredLayer = getLayerTileUrl(normalizedPayload, rasterState.activeLayer)
+    ? rasterState.activeLayer
+    : getFirstAvailableLayer(normalizedPayload);
+  selectRasterLayer(preferredLayer, false);
+  updateSummaryCards(normalizedPayload);
+}
+
+function normalizeRasterPayload(payload) {
+  const tileUrls = { ...(payload.tile_urls || {}) };
+  if (payload.tile_url && !tileUrls.ndvi) {
+    tileUrls.ndvi = payload.tile_url;
+  }
+  return {
+    ...payload,
+    tile_urls: tileUrls,
+    tile_url: payload.tile_url || tileUrls.ndvi || "",
+  };
+}
+
+function selectRasterLayer(layer, shouldUpdateStatus = true) {
+  const payload = rasterState.activePayload;
+  const selectedLayer = layer || "ndvi";
+
+  if (!payload) {
+    rasterState.activeLayer = selectedLayer;
+    updateLayerButtons();
+    if (shouldUpdateStatus) {
+      setRasterStatus("No raster payload loaded yet. Analyze live data first.");
+    }
+    return;
+  }
+
+  const tileUrl = getLayerTileUrl(payload, selectedLayer);
+  if (!tileUrl) {
+    setRasterStatus(`${layerLabels[selectedLayer] || selectedLayer} layer is unavailable for this result.`, true);
+    updateLayerButtons();
+    return;
+  }
+
+  rasterState.activeLayer = selectedLayer;
+  addRasterTileOverlay(tileUrl, selectedLayer);
+  updateLayerButtons();
+  if (shouldUpdateStatus) {
+    setRasterStatus(`Showing ${layerLabels[selectedLayer] || selectedLayer} layer.`);
+  }
+}
+
+function getLayerTileUrl(payload, layer) {
+  return payload.tile_urls?.[layer] || (layer === "ndvi" ? payload.tile_url : null);
+}
+
+function getFirstAvailableLayer(payload) {
+  return ["ndvi", "lst", "anomaly"].find((layer) => getLayerTileUrl(payload, layer)) || "ndvi";
+}
+
+function updateLayerToggleAvailability(payload) {
+  document.querySelectorAll(".layer-toggle").forEach((button) => {
+    const layer = button.dataset.layer;
+    const hasTile = Boolean(getLayerTileUrl(payload, layer));
+    button.disabled = !hasTile;
+    button.title = hasTile
+      ? `${layerLabels[layer] || layer} layer`
+      : `${layerLabels[layer] || layer} layer unavailable for this result`;
+  });
+}
+
+function updateLayerButtons() {
+  document.querySelectorAll(".layer-toggle").forEach((button) => {
+    button.classList.toggle("active", button.dataset.layer === rasterState.activeLayer);
+  });
+}
+
+function addRasterTileOverlay(tileUrl, layer = rasterState.activeLayer) {
   removeRasterOverlay();
   rasterState.rasterTileLayer = L.tileLayer(tileUrl, {
-    opacity: 0.72,
+    opacity: getOpacity(),
     maxZoom: 19,
     zIndex: 450,
     crossOrigin: true,
@@ -185,13 +267,13 @@ function addRasterTileOverlay(tileUrl) {
 
   rasterState.rasterTileLayer.on("tileerror", () => {
     setRasterStatus(
-      "โหลด tile overlay ไม่สำเร็จ แต่ค่า summary จาก backend ยังแสดงอยู่ กรุณาลองช่วงวันที่กว้างขึ้นหรือ refresh token ของ tile",
+      `Could not load ${layerLabels[layer] || layer} tiles. Summary values are still available.`,
       true,
     );
   });
 
   rasterState.rasterTileLayer.on("load", () => {
-    setRasterStatus("แสดง tile overlay จาก Microsoft Planetary Computer บนแผนที่แล้ว");
+    setRasterStatus(`Showing ${layerLabels[layer] || layer} tile overlay.`);
   });
 
   rasterState.rasterTileLayer.addTo(rasterMap);
@@ -200,7 +282,7 @@ function addRasterTileOverlay(tileUrl) {
     rasterMap.fitBounds(rasterState.drawnLayer.getBounds().pad(0.12));
   }
   if (rasterElements.subtitle) {
-    rasterElements.subtitle.textContent = "ชั้นข้อมูลความเครียดจาก Microsoft Planetary Computer";
+    rasterElements.subtitle.textContent = `${layerLabels[layer] || layer} layer from raster analysis`;
   }
 }
 
@@ -218,7 +300,10 @@ function updateSummaryCards(payload) {
     formatMaybeNumber(payload.mean_lst_celsius ?? payload.lst_celsius, 1, " C"),
   );
   setText(rasterElements.risk, payload.risk_level ?? payload.stress_class ?? "--");
-  setText(rasterElements.cells, payload.pixel_count ?? payload.tile_count ?? "ไทล์");
+  setText(
+    rasterElements.cells,
+    formatCellCount(payload.valid_pixel_count ?? payload.pixel_count ?? payload.tile_count),
+  );
 }
 
 function getSelectedDates() {
@@ -226,14 +311,109 @@ function getSelectedDates() {
   const endDate = rasterElements.endDate?.value;
 
   if (!startDate || !endDate) {
-    throw new Error("กรุณาเลือกวันที่เริ่มต้นและวันที่สิ้นสุด");
+    throw new Error("Please choose start and end dates.");
   }
   if (startDate > endDate) {
-    throw new Error("วันที่เริ่มต้นต้องมาก่อนหรือเท่ากับวันที่สิ้นสุด");
+    throw new Error("Start date must be before or equal to end date.");
   }
 
   return { startDate, endDate };
 }
+
+function plotManualPolygon() {
+  let latLngs;
+  try {
+    latLngs = parseManualCoordinateLines(rasterElements.manualCoords?.value || "");
+  } catch (error) {
+    setRasterStatus(error.message, true);
+    return;
+  }
+
+  drawnItems.clearLayers();
+  removeRasterOverlay();
+  rasterState.activePayload = null;
+  rasterState.drawnLayer = L.polygon(latLngs, {
+    color: "#059669",
+    weight: 3,
+    fillOpacity: 0.12,
+  });
+  drawnItems.addLayer(rasterState.drawnLayer);
+
+  const coordinates = latLngs.map(([lat, lon]) => [lon, lat]);
+  if (!sameCoordinate(coordinates[0], coordinates[coordinates.length - 1])) {
+    coordinates.push([...coordinates[0]]);
+  }
+  setActivePolygon({
+    type: "Polygon",
+    coordinates: [coordinates],
+  });
+
+  rasterMap.fitBounds(rasterState.drawnLayer.getBounds().pad(0.12));
+  updateLayerButtons();
+  setRasterStatus("Manual polygon ready. Click analyze to request live raster layers.");
+}
+
+function parseManualCoordinateLines(rawText) {
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 3) {
+    throw new Error("Enter at least three latitude, longitude coordinate lines.");
+  }
+
+  const latLngs = lines.map((line, index) => {
+    const parts = line.split(/[,\s]+/).filter(Boolean);
+    if (parts.length !== 2) {
+      throw new Error(`Line ${index + 1} must contain latitude and longitude.`);
+    }
+
+    const lat = Number(parts[0]);
+    const lon = Number(parts[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      throw new Error(`Line ${index + 1} contains non-numeric coordinates.`);
+    }
+    if (lat < -90 || lat > 90) {
+      throw new Error(`Line ${index + 1} latitude must be between -90 and 90.`);
+    }
+    if (lon < -180 || lon > 180) {
+      throw new Error(`Line ${index + 1} longitude must be between -180 and 180.`);
+    }
+    return [lat, lon];
+  });
+
+  const uniqueVertices = new Set(latLngs.map(([lat, lon]) => `${lat},${lon}`));
+  if (uniqueVertices.size < 3) {
+    throw new Error("Manual polygon must contain at least three unique vertices.");
+  }
+
+  return latLngs;
+}
+
+function setActivePolygon(geometry) {
+  if (!geometry || geometry.type !== "Polygon" || !Array.isArray(geometry.coordinates)) {
+    throw new Error("Selected geometry must be a GeoJSON Polygon.");
+  }
+  rasterState.polygon = geometry;
+  setText(rasterElements.bbox, JSON.stringify(geometry.coordinates, null, 2));
+}
+
+function sameCoordinate(first, second) {
+  return Boolean(first && second && first[0] === second[0] && first[1] === second[1]);
+}
+
+function getOpacity() {
+  const slider = document.getElementById("opacitySlider");
+  const value = Number(slider?.value ?? 72);
+  return Number.isFinite(value) ? value / 100 : 0.72;
+}
+
+document.getElementById("opacitySlider")?.addEventListener("input", () => {
+  if (rasterState.rasterTileLayer) {
+    rasterState.rasterTileLayer.setOpacity(getOpacity());
+  }
+});
 
 function setRasterStatus(message, isError = false) {
   if (!rasterElements.status) return;
@@ -246,7 +426,25 @@ function setText(element, value) {
 }
 
 function formatMaybeNumber(value, digits, suffix = "") {
+  if (value === null || value === undefined || value === "") return "--";
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return "--";
   return `${numberValue.toFixed(digits)}${suffix}`;
+}
+
+function formatCellCount(value) {
+  if (value === null || value === undefined || value === "") return "--";
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return String(value);
+  return `${numberValue.toLocaleString()} pixels`;
+}
+
+function formatApiDetail(detail) {
+  if (Array.isArray(detail)) {
+    return detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    return JSON.stringify(detail);
+  }
+  return String(detail || "");
 }

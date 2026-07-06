@@ -43,6 +43,28 @@ The response includes the normalized `polygon`, `ndvi_summary`, optional `lst_su
 
 The Avg LST KPI reads `lst_summary.mean` first. If LST is missing, the backend returns `lst_summary.mean: null` and `lst_status: "missing"`. The frontend displays `-- °C` and shows the missing reason under the KPI instead of showing `0.0 °C`.
 
+## Raster Page Layer Switching
+
+The raster page at `/raster` sends drawn GeoJSON polygon coordinates to `/api/analyze-stress`. The backend returns `tile_urls` keyed by layer:
+
+```json
+{
+  "tile_urls": {
+    "ndvi": "https://tiles.example/ndvi/{z}/{x}/{y}.png",
+    "lst": "https://tiles.example/lst/{z}/{x}/{y}.png",
+    "anomaly": "https://tiles.example/anomaly/{z}/{x}/{y}.png"
+  },
+  "mean_ndvi": 0.58,
+  "mean_lst_celsius": null,
+  "lst_status": "missing",
+  "risk_level": "normal"
+}
+```
+
+Layer buttons are enabled whenever the active payload contains a URL for that layer. Switching between NDVI, LST, and anomaly replaces the Leaflet tile overlay from the already loaded response, so the page does not re-run the API request just to change layers.
+
+The JSON import control accepts a saved backend response with either the new `tile_urls` object or the legacy `tile_url` field. Legacy imports only enable layers that are actually present in the payload.
+
 ## Dynamic Anomaly Mode
 
 When LST is available, backend anomaly detection uses `ndvi`, `ndvi_diff`, `lst_celsius`, and `rainfall_15d_mm`. When LST is missing, it falls back to `ndvi`, `ndvi_diff`, and `rainfall_15d_mm`. The active feature list is returned as `anomaly_model_features`.

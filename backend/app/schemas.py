@@ -206,10 +206,13 @@ class AnalyzeFieldResponse(BaseModel):
     crs: str
     sentinel_scene_ids: list[str]
     landsat_scene_ids: list[str]
+    ecostress_scene_ids: list[str] = Field(default_factory=list)
     ndvi_summary: RasterSummary
     lst_summary: RasterSummary
     lst_status: str = "unknown"
     lst_error: str | None = None
+    lst_source: str | None = None
+    source: str = "Microsoft Planetary Computer"
     anomaly_model_features: list[str] = Field(default_factory=list)
     anomaly_count: int
     pixels: list[PixelResult]
@@ -293,14 +296,27 @@ class AnalyzeStressRequest(BaseModel):
 
 class AnalyzeStressResponse(BaseModel):
     tile_url: str
+    tile_urls: dict[str, str] = Field(default_factory=dict)
     start_date: str
     end_date: str
     mean_ndvi: float
     mean_ndwi: float
     mean_lst_celsius: float | None
+    lst_status: str = "unknown"
+    lst_error: str | None = None
+    lst_source: str | None = None
+    anomaly_count: int = 0
+    anomaly_ratio: float = 0.0
+    anomaly_model_features: list[str] = Field(default_factory=list)
+    thermal_valid_pixel_count: int = 0
+    thermal_critical_pixel_count: int = 0
+    thermal_watch_pixel_count: int = 0
+    thermal_critical_ratio: float = 0.0
+    thermal_watch_ratio: float = 0.0
     rainfall_30d_mm: float
     risk_level: str
-    pixel_count: str = "Planetary Computer tile"
+    valid_pixel_count: int
+    pixel_count: int | None = None
     source: str = "Microsoft Planetary Computer"
 
 

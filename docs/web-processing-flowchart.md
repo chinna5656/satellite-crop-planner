@@ -25,8 +25,8 @@ flowchart TD
     O --> P["Frontend sends GeoJSON coordinates and date range"]
     P --> Q["POST /api/analyze-stress"]
     Q --> R["Backend runs Microsoft Planetary Computer STAC analysis"]
-    R --> S["Return Planetary Computer tile_url and field statistics"]
-    S --> T["Frontend adds tile_url as raster overlay"]
+    R --> S["Return tile_urls, field statistics, and optional LST status"]
+    S --> T["Frontend adds selected tile URL as raster overlay"]
 ```
 
 ## Dashboard Analysis Flow
@@ -88,15 +88,30 @@ flowchart TD
 
     E --> N["Search Landsat 8/9 thermal imagery"]
     N --> O["Use cloud and time-window fallback"]
-    O --> P["Load TIRS Band 10 when available"]
-    P --> Q["Convert DN to radiance, brightness temperature, emissivity-corrected LST Celsius"]
-    Q --> R["Extract mean LST over field, or null if missing"]
+    O --> P{"TIRS Band 10 found?"}
+    P -->|"Yes"| Q["Load B10 and convert to LST Celsius"]
+    P -->|"No"| R["Set mean LST to null and lst_status=missing"]
+    Q --> S["Extract mean LST over field"]
 
-    H --> S["Create Planetary Computer Data API NDVI tile URL"]
-    M --> T["Create analysis response"]
-    R --> T
-    S --> T
-    T --> U["Return tile_url, NDVI, NDWI, optional LST, risk level, and statistics"]
+    H --> T["Create Planetary Computer Data API NDVI tile URL"]
+    M --> U["Create analysis response"]
+    R --> U
+    S --> U
+    T --> U
+    U --> V["Return tile_urls, NDVI, NDWI, optional LST, risk level, and statistics"]
+```
+
+## Raster Layer Toggle Flow
+
+```mermaid
+flowchart TD
+    A["API or imported JSON payload loaded"] --> B["Normalize legacy tile_url into tile_urls.ndvi"]
+    B --> C["Store payload in rasterState.activePayload"]
+    C --> D["Enable buttons with available tile_urls"]
+    D --> E["User clicks NDVI, LST, or anomaly"]
+    E --> F{"Layer URL available?"}
+    F -->|"Yes"| G["Replace Leaflet tile layer without API refetch"]
+    F -->|"No"| H["Show unavailable-layer status"]
 ```
 
 ## LST Missing Flow

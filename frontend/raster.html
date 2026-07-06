@@ -69,28 +69,28 @@
 
           <section class="space-y-3">
             <h2 class="text-sm font-bold text-slate-950">วิเคราะห์แปลงใหม่</h2>
-            <p class="text-sm leading-6 text-slate-600">วาดขอบเขตแปลงและเรียกใช้แบ็กเอนด์เพื่อแสดงชั้นข้อมูล NDVI/LST บนแผนที่</p>
+            <textarea
+              id="rasterManualCoordsInput"
+              class="form-input min-h-[132px] resize-y text-sm leading-6"
+              placeholder="14.215, 100.521&#10;14.215, 100.5215&#10;14.2155, 100.5215&#10;14.2155, 100.521"
+            ></textarea>
+            <button id="rasterPlotManualPolygonBtn" class="secondary-btn w-full">สร้างขอบเขตจากพิกัด</button>
             <pre id="rasterBbox" class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">ยังไม่ได้เลือกแปลง</pre>
-            <div class="date-grid">
+            <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="form-label" for="rasterStartDate">วันที่เริ่มต้น</label>
-                <input id="rasterStartDate" class="form-input" type="date" value="2025-01-01" />
+                <label class="form-label block" for="rasterStartDate">วันที่เริ่มต้น</label>
+                <input id="rasterStartDate" class="form-input w-full" type="date" value="2025-01-01" />
               </div>
               <div>
-                <label class="form-label" for="rasterEndDate">วันที่สิ้นสุด</label>
-                <input id="rasterEndDate" class="form-input" type="date" value="2025-03-31" />
+                <label class="form-label block" for="rasterEndDate">วันที่สิ้นสุด</label>
+                <input id="rasterEndDate" class="form-input w-full" type="date" value="2025-03-31" />
               </div>
-              <div>
-                <label class="form-label" for="rasterRainfall">ฝนสะสม 15 วัน (มม.)</label>
-                <input id="rasterRainfall" class="form-input" type="number" min="0" value="42" />
+              <div class="col-span-2">
+                <label class="form-label block" for="rasterRainfall">ฝนสะสม 15 วัน (มม.)</label>
+                <input id="rasterRainfall" class="form-input w-full" type="number" min="0" value="42" />
               </div>
             </div>
             <button id="rasterAnalyzeBtn" class="primary-btn w-full">วิเคราะห์และแสดงราสเตอร์</button>
-            <button id="rasterDemoBtn" class="secondary-btn w-full">โหลดราสเตอร์ตัวอย่าง</button>
-            <label class="secondary-btn flex cursor-pointer items-center justify-center">
-              นำเข้า JSON จากแบ็กเอนด์
-              <input id="rasterJsonUpload" type="file" accept="application/json" class="hidden" />
-            </label>
             <p id="rasterStatus" class="text-sm text-slate-500">พร้อมแสดงชั้นข้อมูลราสเตอร์ NDVI/LST</p>
           </section>
 
@@ -134,6 +134,6 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-    <script src="/static/raster.js?v=20260626-result-display-fix"></script>
+    <script src="/static/raster.js?v=20260707-manual-coords"></script>
   </body>
 </html>

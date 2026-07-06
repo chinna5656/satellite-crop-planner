@@ -3,7 +3,7 @@ const MAX_DISPLAY_MARKERS = 60;
 
 const state = {
   bbox: null,
-  polygon: null, // [แก้ไขจุดนี้]: เพิ่มตัวแปรสำหรับเก็บโครงสร้าง Polygon ในระบบ
+  polygon: null,
   fieldLayer: null,
   resultPolygonLayer: null,
   alertLayer: null,
@@ -231,7 +231,7 @@ L.control.zoom({ position: "bottomright" }).addTo(map);
 L.tileLayer(
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
   {
-    maxZoom: 20,
+    maxZoom: 18,
     attribution: "Tiles &copy; Esri",
   },
 ).addTo(map);
@@ -239,7 +239,7 @@ L.tileLayer(
 L.tileLayer(
   "https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
   {
-    maxZoom: 20,
+    maxZoom: 18,
     pane: "overlayPane",
   },
 ).addTo(map);

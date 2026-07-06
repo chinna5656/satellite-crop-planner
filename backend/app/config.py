@@ -29,10 +29,13 @@ class Settings(BaseSettings):
     relaxed_max_cloud_cover: float = Field(default=80.0, ge=0.0, le=100.0)
     sentinel_collection: str = "sentinel-2-l2a"
     landsat_collection: str = "landsat-c2-l1"
+    ecostress_collection: str = "ecostress-tiled"
     analysis_resolution_m: int = Field(default=10, gt=0)
     landsat_resolution_m: int = Field(default=30, gt=0)
+    ecostress_resolution_m: int = Field(default=70, gt=0)
     max_sentinel_items: int = Field(default=4, ge=1, le=20)
     max_landsat_items: int = Field(default=3, ge=1, le=20)
+    max_ecostress_items: int = Field(default=5, ge=1, le=20)
     max_response_pixels: int = Field(default=15000, ge=100, le=250000)
     default_rainfall_mm_15d: float = Field(default=0.0, ge=0.0)
 

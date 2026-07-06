@@ -105,21 +105,20 @@
 
         <section class="space-y-3">
           <h2 class="text-sm font-bold text-slate-950">คำขอวิเคราะห์</h2>
-          <div class="date-grid">
-            <div>
-              <label class="form-label" for="startDate">วันที่เริ่มต้น</label>
-              <input id="startDate" class="form-input" type="date" autocomplete="off" />
+          <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="form-label block" for="rasterStartDate">วันที่เริ่มต้น</label>
+                <input id="rasterStartDate" class="form-input w-full" type="date" value="2025-01-01" />
+              </div>
+              <div>
+                <label class="form-label block" for="rasterEndDate">วันที่สิ้นสุด</label>
+                <input id="rasterEndDate" class="form-input w-full" type="date" value="2025-03-31" />
+              </div>
+              <div class="col-span-2">
+                <label class="form-label block" for="rasterRainfall">ฝนสะสม 15 วัน (มม.)</label>
+                <input id="rasterRainfall" class="form-input w-full" type="number" min="0" value="42" />
+              </div>
             </div>
-            <div>
-              <label class="form-label" for="endDate">วันที่สิ้นสุด</label>
-              <input id="endDate" class="form-input" type="date" />
-            </div>
-            <div>
-              <label class="form-label" for="rainfallInput">ฝนสะสม 15 วัน (มม.)</label>
-              <input id="rainfallInput" class="form-input" type="number" min="0" step="0.1" value="42"
-                inputmode="decimal" />
-            </div>
-          </div>
           <button id="analyzeBtn" class="primary-btn w-full">
             วิเคราะห์แปลง
           </button>

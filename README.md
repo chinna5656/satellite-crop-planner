@@ -222,7 +222,7 @@ Example request:
 
 ## LST Fallback Behavior
 
-LST is optional. If Landsat 8/9 Level-1 scenes with TIRS Band 10 are unavailable, or LST conversion returns no valid pixels after polygon clipping, the API still returns NDVI and anomaly results.
+LST is optional and multi-source. The backend tries Landsat 8/9 Level-1 TIRS Band 10 first, then falls back to ECOSTRESS LST for small polygons or narrow date ranges. If both thermal sources are unavailable, the API still returns NDVI and anomaly results.
 
 Missing LST response fields:
 
@@ -235,6 +235,7 @@ Missing LST response fields:
     "valid_pixel_count": 0
   },
   "lst_status": "missing",
+  "lst_source": "Sentinel-2 Only",
   "lst_error": "Reason from backend",
   "pixels": [
     {
@@ -301,3 +302,9 @@ The k6 script writes `k6-summary.json` after each run.
 ## Data Transfer Workflow
 
 See [docs/data-transfer-workflow.md](docs/data-transfer-workflow.md) for the Leaflet-to-FastAPI-to-Planetary-Computer request/response workflow.
+
+## Raster Layer Switching
+
+The `/raster` page now expects `/api/analyze-stress` to return a `tile_urls` object keyed by `ndvi`, `lst`, and `anomaly`. The frontend switches between available tile layers without calling the API again. If Landsat thermal data is missing, the backend keeps the Sentinel NDVI response successful, returns `mean_lst_celsius: null`, and disables only unavailable LST tiles.
+
+The raster page also supports manual JSON import for saved backend responses. Imported files can use either the current `tile_urls` response shape or the older single `tile_url` field, but only explicitly provided layers are enabled.

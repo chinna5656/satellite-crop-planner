@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 import urllib.request
@@ -36,6 +37,15 @@ SENTINEL_RED_BAND = "B04"
 SENTINEL_GREEN_BAND = "B03"
 SENTINEL_NIR_BAND = "B08"
 LANDSAT_TIRS_BAND_10 = "B10"
+ECOSTRESS_COLLECTION_CANDIDATES = ("ecostress-tiled", "ecostress-tiste", "ecostress-lste")
+ECOSTRESS_LST_ASSET_CANDIDATES = (
+    "LST",
+    "lst",
+    "LST_Day",
+    "land_surface_temperature",
+    "surface_temperature",
+    "SDS_LST",
+)
 LANDSAT_MTL_ASSET_CANDIDATES = ("MTL.txt", "mtl.txt", "MTL", "mtl")
 WGS84 = "EPSG:4326"
 PLANETARY_COMPUTER_DATA_API_URL = "https://planetarycomputer.microsoft.com/api/data/v1"
@@ -52,6 +62,17 @@ class AnalysisInputs:
     polygon: dict[str, Any]
     time_range: str
     rainfall_15d_mm: float
+
+
+@dataclass(frozen=True)
+class ThermalResult:
+    lst: xr.DataArray
+    status: str
+    source: str
+    error: str | None = None
+    landsat_items: list[Item] | None = None
+    ecostress_items: list[Item] | None = None
+    ecostress_asset: str | None = None
 
 
 @dataclass(frozen=True)
@@ -361,7 +382,7 @@ def analyze_field_with_planetary_computer(
     start_date: str,
     end_date: str,
     settings: Settings,
-) -> dict[str, float | str]:
+) -> dict[str, Any]:
     """Return stress statistics and an NDVI tile URL from Microsoft Planetary Computer."""
 
     polygon_ring = _normalize_polygon_ring(polygon_coordinates)
@@ -377,32 +398,106 @@ def analyze_field_with_planetary_computer(
     ndwi_cube = service._calculate_ndwi(sentinel_cube)
     current_ndvi = ndvi_cube.isel(time=-1)
     current_ndwi = ndwi_cube.isel(time=-1)
-    try:
-        landsat_items = service._search_landsat(polygon, time_range)
-        lst = service._calculate_lst_celsius(landsat_items, bbox, polygon, current_ndvi)
-    except CropAnalysisError:
-        lst = xr.full_like(current_ndvi, np.nan).rio.write_crs(WGS84)
+    ndvi_diff = service._calculate_first_order_ndvi_difference(ndvi_cube)
+    thermal_result = service._resolve_thermal_lst(
+        polygon=polygon,
+        bbox=bbox,
+        time_range=time_range,
+        ndvi_reference=current_ndvi,
+    )
+    lst = thermal_result.lst
 
-    current_ndvi, current_ndwi, lst = xr.align(current_ndvi, current_ndwi, lst, join="inner")
+    current_ndvi, current_ndwi, ndvi_diff, lst = xr.align(
+        current_ndvi,
+        current_ndwi,
+        ndvi_diff,
+        lst,
+        join="inner",
+    )
     ndvi_summary = service._summary(current_ndvi)
     ndwi_summary = service._summary(current_ndwi)
     lst_summary = service._summary(lst)
-    print(f"NDVI summary: {ndvi_summary}, NDWI summary: {ndwi_summary}, LST summary: {lst_summary}")
+    lst_status = thermal_result.status
+    if lst_summary.valid_pixel_count == 0:
+        lst_status = "missing"
+    lst_error = thermal_result.error
+    thermal_source = thermal_result.source if lst_status == "available" else "Sentinel-2 Only"
+    anomaly_flags, anomaly_model_features = service._detect_anomalies(
+        current_ndvi=current_ndvi,
+        ndvi_diff=ndvi_diff,
+        lst=lst,
+        rainfall_15d_mm=settings.default_rainfall_mm_15d,
+        use_lst=lst_status == "available",
+    )
+    valid_pixel_count = ndvi_summary.valid_pixel_count
+    anomaly_count = int(np.nansum(anomaly_flags.values))
+    anomaly_ratio = anomaly_count / valid_pixel_count if valid_pixel_count else 0.0
+    lst_values = lst.values.reshape(-1)
+    finite_lst_mask = np.isfinite(lst_values)
+    thermal_valid_pixel_count = int(finite_lst_mask.sum())
+    thermal_critical_pixel_count = int((finite_lst_mask & (lst_values >= 38.0)).sum())
+    thermal_watch_pixel_count = int((finite_lst_mask & (lst_values >= 34.0)).sum())
+    thermal_critical_ratio = (
+        thermal_critical_pixel_count / thermal_valid_pixel_count
+        if thermal_valid_pixel_count
+        else 0.0
+    )
+    thermal_watch_ratio = (
+        thermal_watch_pixel_count / thermal_valid_pixel_count
+        if thermal_valid_pixel_count
+        else 0.0
+    )
     tile_url = create_planetary_computer_ndvi_tile_url(
         sentinel_items[-1],
         settings.sentinel_collection,
     )
+    anomaly_tile_url = create_planetary_computer_anomaly_tile_url(
+        sentinel_items[-1],
+        settings.sentinel_collection,
+    )
+    tile_urls = {
+        "ndvi": tile_url,
+        "anomaly": anomaly_tile_url,
+    }
+    if lst_status == "available" and thermal_result.landsat_items:
+        tile_urls["lst"] = create_planetary_computer_lst_tile_url(
+            thermal_result.landsat_items[-1],
+            settings.landsat_collection,
+        )
+    elif (
+        lst_status == "available"
+        and thermal_result.ecostress_items
+        and thermal_result.ecostress_asset
+    ):
+        tile_urls["lst"] = create_planetary_computer_ecostress_lst_tile_url(
+            thermal_result.ecostress_items[-1],
+            thermal_result.ecostress_items[-1].collection_id or settings.ecostress_collection,
+            thermal_result.ecostress_asset,
+        )
 
     return {
         "tile_url": tile_url,
+        "tile_urls": tile_urls,
         "start_date": start_date,
         "end_date": end_date,
         "mean_ndvi": _required_summary_mean(ndvi_summary, "NDVI"),
         "mean_ndwi": _required_summary_mean(ndwi_summary, "NDWI"),
         "mean_lst_celsius": lst_summary.mean,
+        "lst_status": lst_status,
+        "lst_error": lst_error,
+        "lst_source": thermal_source,
+        "anomaly_count": anomaly_count,
+        "anomaly_ratio": anomaly_ratio,
+        "anomaly_model_features": anomaly_model_features,
+        "thermal_valid_pixel_count": thermal_valid_pixel_count,
+        "thermal_critical_pixel_count": thermal_critical_pixel_count,
+        "thermal_watch_pixel_count": thermal_watch_pixel_count,
+        "thermal_critical_ratio": thermal_critical_ratio,
+        "thermal_watch_ratio": thermal_watch_ratio,
         "rainfall_30d_mm": 0.0,
-        "pixel_count": f"{ndvi_summary.valid_pixel_count} pixels",
-        "source": "Microsoft Planetary Computer",
+        "valid_pixel_count": valid_pixel_count,
+        "pixel_count": valid_pixel_count,
+        "source": thermal_source,
     }
 
 
@@ -418,6 +513,74 @@ def create_planetary_computer_ndvi_tile_url(item: Item, collection: str) -> str:
             "expression": f"({SENTINEL_NIR_BAND}-{SENTINEL_RED_BAND})/({SENTINEL_NIR_BAND}+{SENTINEL_RED_BAND})",
             "rescale": "-0.2,0.9",
             "colormap_name": "rdylgn",
+        },
+        doseq=True,
+    )
+    return f"{PLANETARY_COMPUTER_DATA_API_URL}/item/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}@1x?{query}"
+
+
+def create_planetary_computer_anomaly_tile_url(item: Item, collection: str) -> str:
+    """Build a stress-focused tile URL that isolates low-NDVI anomaly candidates."""
+
+    ndvi_expression = (
+        f"({SENTINEL_NIR_BAND}-{SENTINEL_RED_BAND})"
+        f"/({SENTINEL_NIR_BAND}+{SENTINEL_RED_BAND})"
+    )
+    query = urlencode(
+        {
+            "collection": collection,
+            "item": item.id,
+            "assets": [SENTINEL_RED_BAND, SENTINEL_NIR_BAND],
+            "asset_as_band": "true",
+            "expression": f"where({ndvi_expression}<0.35,1,0)",
+            "rescale": "0,1",
+            "colormap": json.dumps(
+                {
+                    "0": [0, 0, 0, 0],
+                    "1": [220, 38, 38, 220],
+                },
+                separators=(",", ":"),
+            ),
+        },
+        doseq=True,
+    )
+    return f"{PLANETARY_COMPUTER_DATA_API_URL}/item/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}@1x?{query}"
+
+
+def create_planetary_computer_lst_tile_url(item: Item, collection: str) -> str:
+    """Build a color-mapped Landsat B10 thermal tile URL for LST visualization."""
+
+    query = urlencode(
+        {
+            "collection": collection,
+            "item": item.id,
+            "assets": [LANDSAT_TIRS_BAND_10],
+            "asset_as_band": "true",
+            "expression": LANDSAT_TIRS_BAND_10,
+            "rescale": "20000,50000",
+            "colormap_name": "inferno",
+        },
+        doseq=True,
+    )
+    return f"{PLANETARY_COMPUTER_DATA_API_URL}/item/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}@1x?{query}"
+
+
+def create_planetary_computer_ecostress_lst_tile_url(
+    item: Item,
+    collection: str,
+    asset_name: str,
+) -> str:
+    """Build a color-mapped ECOSTRESS LST tile URL."""
+
+    query = urlencode(
+        {
+            "collection": collection,
+            "item": item.id,
+            "assets": [asset_name],
+            "asset_as_band": "true",
+            "expression": asset_name,
+            "rescale": "270,330",
+            "colormap_name": "inferno",
         },
         doseq=True,
     )
@@ -491,25 +654,19 @@ class CropAnalysisService:
         current_ndvi = ndvi_cube.isel(time=-1)
         ndvi_diff = self._calculate_first_order_ndvi_difference(ndvi_cube)
 
-        landsat_items: list[Item] = []
-        lst_error: str | None = None
-        try:
-            landsat_items = self._search_landsat(inputs.polygon, inputs.time_range)
-            lst = self._calculate_lst_celsius(
-                landsat_items,
-                inputs.bbox,
-                inputs.polygon,
-                current_ndvi,
-            )
-        except CropAnalysisError as exc:
-            lst_error = str(exc)
-            lst = xr.full_like(current_ndvi, np.nan).rio.write_crs(WGS84)
+        thermal_result = self._resolve_thermal_lst(
+            polygon=inputs.polygon,
+            bbox=inputs.bbox,
+            time_range=inputs.time_range,
+            ndvi_reference=current_ndvi,
+        )
+        lst = thermal_result.lst
 
         current_ndvi, ndvi_diff, lst = xr.align(current_ndvi, ndvi_diff, lst, join="inner")
         lst_summary = self._summary(lst)
-        lst_status = "available" if lst_summary.valid_pixel_count > 0 else "missing"
-        if lst_status == "missing" and lst_error is None:
-            lst_error = "LST calculation completed but returned no valid thermal pixels."
+        lst_status = thermal_result.status
+        if lst_summary.valid_pixel_count == 0:
+            lst_status = "missing"
         anomaly_flags, anomaly_model_features = self._detect_anomalies(
             current_ndvi=current_ndvi,
             ndvi_diff=ndvi_diff,
@@ -531,11 +688,18 @@ class CropAnalysisService:
             time_range=inputs.time_range,
             crs=WGS84,
             sentinel_scene_ids=[item.id for item in sentinel_items],
-            landsat_scene_ids=[item.id for item in landsat_items],
+            landsat_scene_ids=[
+                item.id for item in (thermal_result.landsat_items or [])
+            ],
+            ecostress_scene_ids=[
+                item.id for item in (thermal_result.ecostress_items or [])
+            ],
             ndvi_summary=self._summary(current_ndvi),
             lst_summary=lst_summary,
             lst_status=lst_status,
-            lst_error=lst_error,
+            lst_error=thermal_result.error,
+            lst_source=thermal_result.source,
+            source=thermal_result.source,
             anomaly_model_features=anomaly_model_features,
             anomaly_count=int(np.nansum(anomaly_flags.values)),
             pixels=pixels,
@@ -578,6 +742,111 @@ class CropAnalysisService:
                 "polygon/time_range after cloud and time-window fallbacks."
             )
         return [planetary_computer.sign(item) for item in items]
+
+    def _resolve_thermal_lst(
+        self,
+        *,
+        polygon: dict[str, Any],
+        bbox: list[float],
+        time_range: str,
+        ndvi_reference: xr.DataArray,
+    ) -> ThermalResult:
+        """Resolve LST from Landsat first, then ECOSTRESS, without failing Sentinel analysis."""
+
+        errors: list[str] = []
+
+        try:
+            landsat_items = self._search_landsat(polygon, time_range)
+            landsat_lst = self._calculate_lst_celsius(
+                landsat_items,
+                bbox,
+                polygon,
+                ndvi_reference,
+            )
+            landsat_summary = self._summary(landsat_lst)
+            if landsat_summary.valid_pixel_count > 0:
+                return ThermalResult(
+                    lst=landsat_lst,
+                    status="available",
+                    source="Landsat 8/9 via Microsoft Planetary Computer",
+                    landsat_items=landsat_items,
+                )
+            errors.append("Landsat 8/9 returned 0 valid LST pixels after polygon clipping.")
+        except CropAnalysisError as exc:
+            errors.append(f"Landsat 8/9: {exc}")
+
+        try:
+            ecostress_items = self._search_ecostress(polygon, time_range)
+            ecostress_lst, ecostress_asset = self._calculate_ecostress_lst_celsius(
+                ecostress_items,
+                bbox,
+                polygon,
+                ndvi_reference,
+            )
+            ecostress_summary = self._summary(ecostress_lst)
+            if ecostress_summary.valid_pixel_count > 0:
+                return ThermalResult(
+                    lst=ecostress_lst,
+                    status="available",
+                    source="ECOSTRESS via Microsoft Planetary Computer",
+                    ecostress_items=ecostress_items,
+                    ecostress_asset=ecostress_asset,
+                )
+            errors.append("ECOSTRESS returned 0 valid LST pixels after polygon clipping.")
+        except CropAnalysisError as exc:
+            errors.append(f"ECOSTRESS: {exc}")
+
+        return ThermalResult(
+            lst=xr.full_like(ndvi_reference, np.nan).rio.write_crs(WGS84),
+            status="missing",
+            source="Sentinel-2 Only",
+            error="; ".join(errors) if errors else "No usable thermal pixels found.",
+        )
+
+    def _search_ecostress(self, polygon: dict[str, Any], time_range: str) -> list[Item]:
+        """Find ECOSTRESS LST scenes over the requested polygon/time range."""
+
+        time_ranges = [
+            time_range,
+            self._expand_time_range(time_range, days=7),
+            self._expand_time_range(time_range, days=15),
+            self._expand_time_range(time_range, days=30),
+        ]
+        collections = [
+            self.settings.ecostress_collection,
+            *ECOSTRESS_COLLECTION_CANDIDATES,
+        ]
+
+        search_errors: list[str] = []
+        for collection in dict.fromkeys(collections):
+            for search_time_range in dict.fromkeys(time_ranges):
+                try:
+                    search = self.client.search(
+                        collections=[collection],
+                        intersects=polygon,
+                        datetime=search_time_range,
+                        sortby=[{"field": "properties.datetime", "direction": "asc"}],
+                        max_items=self.settings.max_ecostress_items,
+                    )
+                    items = [
+                        item
+                        for item in search.items()
+                        if self._select_ecostress_lst_asset(item) is not None
+                    ]
+                except Exception as exc:
+                    search_errors.append(f"{collection}: {exc}")
+                    continue
+
+                if items:
+                    return [planetary_computer.sign(item) for item in items]
+
+        detail = "; ".join(search_errors[-3:])
+        suffix = f" Search errors: {detail}" if detail else ""
+        raise ImageryNotFoundError(
+            "No ECOSTRESS LST scenes found for the requested polygon/time_range "
+            "after time-window fallbacks."
+            f"{suffix}"
+        )
 
     def _search_cloud_filtered_items(
         self,
@@ -736,6 +1005,88 @@ class CropAnalysisService:
         lst_celsius = (lst_kelvin - 273.15).rio.write_crs(thermal_cube.odc.crs)
         lst_celsius = lst_celsius.rio.reproject_match(ndvi_reference)
         return self._clip_dataarray_to_polygon(lst_celsius, polygon, "Landsat LST")
+
+    def _calculate_ecostress_lst_celsius(
+        self,
+        ecostress_items: list[Item],
+        bbox: list[float],
+        polygon: dict[str, Any],
+        ndvi_reference: xr.DataArray,
+    ) -> tuple[xr.DataArray, str]:
+        """Load ECOSTRESS LST, convert to Celsius when needed, and align to NDVI."""
+
+        item = ecostress_items[-1]
+        asset_name = self._select_ecostress_lst_asset(item)
+        if asset_name is None:
+            raise ImageryProcessingError("Selected ECOSTRESS item has no recognizable LST asset.")
+
+        try:
+            thermal_cube = odc.stac.load(
+                [item],
+                bands=[asset_name],
+                bbox=bbox,
+                resolution=self.settings.ecostress_resolution_m,
+                chunks={},
+            )
+        except Exception as exc:
+            raise ImageryProcessingError(f"Could not load ECOSTRESS LST imagery: {exc}") from exc
+
+        thermal_cube = self._clip_dataset_to_polygon(
+            thermal_cube,
+            polygon,
+            "ECOSTRESS LST imagery",
+        )
+        raw_lst = thermal_cube[asset_name].isel(time=0).astype("float32")
+        raw_lst = xr.where(raw_lst > 0, raw_lst, np.nan)
+        lst_celsius = self._ecostress_values_to_celsius(raw_lst, item, asset_name)
+        lst_celsius = lst_celsius.rio.write_crs(thermal_cube.odc.crs)
+        lst_celsius = lst_celsius.rio.reproject_match(ndvi_reference)
+        return (
+            self._clip_dataarray_to_polygon(lst_celsius, polygon, "ECOSTRESS LST"),
+            asset_name,
+        )
+
+    @staticmethod
+    def _select_ecostress_lst_asset(item: Item) -> str | None:
+        for asset_name in ECOSTRESS_LST_ASSET_CANDIDATES:
+            if asset_name in item.assets:
+                return asset_name
+
+        for asset_name in item.assets:
+            normalized = asset_name.lower()
+            if "lst" in normalized or "surface_temperature" in normalized:
+                return asset_name
+        return None
+
+    @staticmethod
+    def _ecostress_values_to_celsius(
+        values: xr.DataArray,
+        item: Item,
+        asset_name: str,
+    ) -> xr.DataArray:
+        """Normalize common ECOSTRESS LST encodings to Celsius."""
+
+        asset = item.assets.get(asset_name)
+        extra_fields = getattr(asset, "extra_fields", {}) if asset is not None else {}
+        scale = CropAnalysisService._asset_number(extra_fields, "scale", "scale_factor")
+        offset = CropAnalysisService._asset_number(extra_fields, "offset", "add_offset")
+
+        normalized = values
+        if scale is not None:
+            normalized = normalized * float(scale)
+        if offset is not None:
+            normalized = normalized + float(offset)
+
+        sample = normalized.values[np.isfinite(normalized.values)]
+        median_value = float(np.nanmedian(sample)) if sample.size else math.nan
+        if not math.isfinite(median_value):
+            return normalized
+        if scale is None and median_value > 1000.0:
+            normalized = normalized * 0.02
+            median_value *= 0.02
+        if median_value > 100.0:
+            return normalized - 273.15
+        return normalized
 
     def _clip_dataset_to_polygon(
         self,
@@ -919,6 +1270,24 @@ class CropAnalysisService:
             value = properties.get(key)
             if value is not None:
                 return float(value)
+        return None
+
+    @staticmethod
+    def _asset_number(extra_fields: dict, *keys: str) -> float | None:
+        for key in keys:
+            value = extra_fields.get(key)
+            if value is not None:
+                return float(value)
+
+        raster_bands = extra_fields.get("raster:bands")
+        if isinstance(raster_bands, list):
+            for band in raster_bands:
+                if not isinstance(band, dict):
+                    continue
+                for key in keys:
+                    value = band.get(key)
+                    if value is not None:
+                        return float(value)
         return None
 
     def _extract_landsat_thermal_constants(
