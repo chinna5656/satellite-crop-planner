@@ -102,6 +102,7 @@ Current polygon-first behavior:
 - Landsat thermal rasters are clipped to the polygon before LST calculation.
 - Landsat search relaxes cloud cover thresholds and expands the time range by 15 and 30 days before giving up.
 - If Landsat/LST is missing, the API still returns NDVI, anomaly pixels, and `lst_status="missing"`.
+- The anomaly detector switches feature sets based on LST availability and reports the chosen set in `anomaly_model_features`.
 
 LST response contract when available:
 
@@ -132,6 +133,15 @@ LST response contract when missing:
   "lst_error": "No Landsat 8/9 Level-1 scenes with TIRS Band 10 found for the requested polygon/time_range after cloud and time-window fallbacks."
 }
 ```
+
+Anomaly model feature sets:
+
+| LST state | `anomaly_model_features` |
+| --- | --- |
+| Available | `["ndvi", "ndvi_diff", "lst_celsius", "rainfall_15d_mm"]` |
+| Missing | `["ndvi", "ndvi_diff", "rainfall_15d_mm"]` |
+
+For very small polygons with fewer than 8 valid pixels, Isolation Forest does not fit, but rule-based anomaly guards still run for sharp NDVI drops under high rainfall and heat stress when LST is available.
 
 - ค้นหา Sentinel-2 L2A จาก Planetary Computer STAC โดยใช้ `eo:cloud_cover < 10`
 - โหลดแบนด์ Red `B04` และ NIR `B08` ที่ความละเอียด 10 เมตร

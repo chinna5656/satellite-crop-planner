@@ -246,6 +246,16 @@ Missing LST response fields:
 
 The frontend displays `-- °C` for missing LST and shows the `lst_status` or `lst_error` reason under the Avg LST KPI.
 
+## Dynamic Anomaly Detection
+
+The anomaly model adapts to LST availability:
+
+- LST available: Isolation Forest uses `ndvi`, `ndvi_diff`, `lst_celsius`, and `rainfall_15d_mm`.
+- LST missing: Isolation Forest falls back to `ndvi`, `ndvi_diff`, and `rainfall_15d_mm`.
+- Very small polygons with too few pixels still run rule-based anomaly guards for sharp NDVI drops and heavy rainfall.
+
+The API returns `anomaly_model_features` so the frontend and logs can show which mode was used.
+
 ## k6 Web Test
 
 Install k6 first: https://grafana.com/docs/k6/latest/set-up/install-k6/

@@ -506,11 +506,17 @@ class CropAnalysisService:
             lst = xr.full_like(current_ndvi, np.nan).rio.write_crs(WGS84)
 
         current_ndvi, ndvi_diff, lst = xr.align(current_ndvi, ndvi_diff, lst, join="inner")
-        anomaly_flags = self._detect_anomalies(current_ndvi, ndvi_diff, inputs.rainfall_15d_mm)
         lst_summary = self._summary(lst)
         lst_status = "available" if lst_summary.valid_pixel_count > 0 else "missing"
         if lst_status == "missing" and lst_error is None:
             lst_error = "LST calculation completed but returned no valid thermal pixels."
+        anomaly_flags, anomaly_model_features = self._detect_anomalies(
+            current_ndvi=current_ndvi,
+            ndvi_diff=ndvi_diff,
+            lst=lst,
+            rainfall_15d_mm=inputs.rainfall_15d_mm,
+            use_lst=lst_status == "available",
+        )
 
         pixels = self._serialize_pixels(
             current_ndvi=current_ndvi,
@@ -530,6 +536,7 @@ class CropAnalysisService:
             lst_summary=lst_summary,
             lst_status=lst_status,
             lst_error=lst_error,
+            anomaly_model_features=anomaly_model_features,
             anomaly_count=int(np.nansum(anomaly_flags.values)),
             pixels=pixels,
         )
@@ -795,36 +802,57 @@ class CropAnalysisService:
 
     @staticmethod
     def _detect_anomalies(
+        *,
         current_ndvi: xr.DataArray,
         ndvi_diff: xr.DataArray,
+        lst: xr.DataArray,
         rainfall_15d_mm: float,
-    ) -> xr.DataArray:
-        """Run Isolation Forest on NDVI, NDVI slope, and 15-day cumulative rainfall."""
+        use_lst: bool,
+    ) -> tuple[xr.DataArray, list[str]]:
+        """Run Isolation Forest with an LST-aware or reduced fallback feature set."""
 
         ndvi_values = current_ndvi.values.reshape(-1)
         diff_values = ndvi_diff.values.reshape(-1)
+        lst_values = lst.values.reshape(-1)
         rainfall_values = np.full_like(ndvi_values, rainfall_15d_mm, dtype="float32")
-        valid_mask = np.isfinite(ndvi_values) & np.isfinite(diff_values)
+        base_valid_mask = np.isfinite(ndvi_values) & np.isfinite(diff_values)
+        lst_valid_mask = base_valid_mask & np.isfinite(lst_values)
+        model_uses_lst = use_lst and int(lst_valid_mask.sum()) >= 8
 
         flags = np.zeros(ndvi_values.shape, dtype="int8")
+        valid_mask = lst_valid_mask if model_uses_lst else base_valid_mask
+        feature_names = ["ndvi", "ndvi_diff"]
+        if model_uses_lst:
+            feature_names.append("lst_celsius")
+        feature_names.append("rainfall_15d_mm")
+
         if valid_mask.sum() >= 8:
-            features = np.column_stack(
-                [ndvi_values[valid_mask], diff_values[valid_mask], rainfall_values[valid_mask]]
-            )
+            feature_columns = [ndvi_values[valid_mask], diff_values[valid_mask]]
+            if model_uses_lst:
+                feature_columns.append(lst_values[valid_mask])
+            feature_columns.append(rainfall_values[valid_mask])
+            features = np.column_stack(feature_columns)
             model = IsolationForest(contamination="auto", random_state=42)
             predictions = model.fit_predict(features)
             flags[valid_mask] = np.where(predictions == -1, 1, 0)
 
-            rainfall_high = rainfall_15d_mm >= 25.0
-            sharp_ndvi_drop = diff_values < -0.12
-            weak_vegetation = ndvi_values < 0.35
-            flags[valid_mask & rainfall_high & sharp_ndvi_drop & weak_vegetation] = 1
+        rainfall_high = rainfall_15d_mm >= 25.0
+        sharp_ndvi_drop = diff_values < -0.12
+        weak_vegetation = ndvi_values < 0.35
+        heuristic_mask = base_valid_mask & rainfall_high & sharp_ndvi_drop & weak_vegetation
+        if model_uses_lst:
+            heat_stress = np.isfinite(lst_values) & (lst_values >= 38.0)
+            heuristic_mask = heuristic_mask | (base_valid_mask & heat_stress & weak_vegetation)
+        flags[heuristic_mask] = 1
 
-        return xr.DataArray(
-            flags.reshape(current_ndvi.shape),
-            coords=current_ndvi.coords,
-            dims=current_ndvi.dims,
-            name="is_anomaly",
+        return (
+            xr.DataArray(
+                flags.reshape(current_ndvi.shape),
+                coords=current_ndvi.coords,
+                dims=current_ndvi.dims,
+                name="is_anomaly",
+            ),
+            feature_names,
         )
 
     def _serialize_pixels(

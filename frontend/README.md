@@ -37,11 +37,15 @@ The dashboard sends a GeoJSON Polygon to `/api/analyze-field`:
 }
 ```
 
-The response includes the normalized `polygon`, `ndvi_summary`, optional `lst_summary`, `lst_status`, `lst_error`, and sampled `pixels`.
+The response includes the normalized `polygon`, `ndvi_summary`, optional `lst_summary`, `lst_status`, `lst_error`, `anomaly_model_features`, and sampled `pixels`.
 
 ## Avg LST Display
 
 The Avg LST KPI reads `lst_summary.mean` first. If LST is missing, the backend returns `lst_summary.mean: null` and `lst_status: "missing"`. The frontend displays `-- °C` and shows the missing reason under the KPI instead of showing `0.0 °C`.
+
+## Dynamic Anomaly Mode
+
+When LST is available, backend anomaly detection uses `ndvi`, `ndvi_diff`, `lst_celsius`, and `rainfall_15d_mm`. When LST is missing, it falls back to `ndvi`, `ndvi_diff`, and `rainfall_15d_mm`. The active feature list is returned as `anomaly_model_features`.
 
 สำหรับการทดสอบในเครื่อง ให้รัน frontend และ backend จากโฟลเดอร์หลัก:
 

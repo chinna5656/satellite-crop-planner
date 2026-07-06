@@ -210,6 +210,7 @@ class AnalyzeFieldResponse(BaseModel):
     lst_summary: RasterSummary
     lst_status: str = "unknown"
     lst_error: str | None = None
+    anomaly_model_features: list[str] = Field(default_factory=list)
     anomaly_count: int
     pixels: list[PixelResult]
 

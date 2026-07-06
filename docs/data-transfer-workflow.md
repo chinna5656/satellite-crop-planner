@@ -17,7 +17,7 @@ flowchart TD
     H --> I
     I --> J[Load rasters with odc.stac using derived bbox window]
     J --> K[Clip rasters to exact polygon with rioxarray]
-    K --> L[Calculate NDVI, NDWI, optional LST, and anomaly metrics]
+    K --> L[Calculate NDVI, NDWI, optional LST, and dynamic anomaly metrics]
     L --> M[Return structured JSON response]
     M --> N[Frontend updates KPI cards, polygon overlay, alerts, charts, and raster overlay]
 ```
@@ -93,6 +93,7 @@ Expected response shape:
   },
   "lst_status": "available",
   "lst_error": null,
+  "anomaly_model_features": ["ndvi", "ndvi_diff", "lst_celsius", "rainfall_15d_mm"],
   "anomaly_count": 0,
   "pixels": [
     {
@@ -114,8 +115,9 @@ Frontend behavior:
 2. Displays the returned polygon as a result overlay.
 3. Renders KPI cards from `ndvi_summary`, `lst_summary`, and anomaly values.
 4. Shows the LST source or missing reason under the LST KPI.
-5. Places color-coded map alerts from `pixels`.
-6. Falls back to a field summary marker if the backend returns summary data but no per-pixel list.
+5. Uses `anomaly_model_features` for debugging which anomaly mode ran.
+6. Places color-coded map alerts from `pixels`.
+7. Falls back to a field summary marker if the backend returns summary data but no per-pixel list.
 
 ## LST Fallback Behavior
 
@@ -147,6 +149,19 @@ The backend tries:
 ```
 
 The frontend displays `-- °C` for missing LST rather than `0.0 °C`.
+
+## Dynamic Anomaly Detection
+
+Sentinel-2 is the required pipeline. If Sentinel-2 succeeds, NDVI and anomaly outputs are produced even when Landsat fails.
+
+The anomaly model switches feature sets:
+
+| LST state | Feature set |
+| --- | --- |
+| `lst_status: "available"` | `["ndvi", "ndvi_diff", "lst_celsius", "rainfall_15d_mm"]` |
+| `lst_status: "missing"` | `["ndvi", "ndvi_diff", "rainfall_15d_mm"]` |
+
+If a micro-polygon has fewer than 8 valid pixels, Isolation Forest cannot fit reliably. The backend still applies rule-based anomaly guards for high rainfall plus sharp NDVI drops, and heat stress when LST exists.
 
 ## Raster Data Send
 
@@ -218,7 +233,8 @@ sequenceDiagram
     API->>MPC: Search Landsat with cloud/time fallbacks
     MPC-->>API: Return Landsat items or none
     API->>API: Compute NDVI and optional LST
-    API-->>UI: Return summaries, pixels, polygon, and LST status
+    API->>API: Select full or reduced anomaly feature set
+    API-->>UI: Return summaries, pixels, polygon, LST status, and anomaly_model_features
     UI->>UI: Render polygon overlay, map pins, KPI cards, and charts
 ```
 

@@ -17,7 +17,7 @@ flowchart TD
     H --> I["POST /api/analyze-field"]
     I --> J["Backend searches STAC with intersects=polygon"]
     J --> K["Load bbox window and clip rasters to polygon"]
-    K --> L["Return NDVI, optional LST, anomaly flags, KPIs, and result polygon"]
+    K --> L["Return NDVI, optional LST, anomaly flags, anomaly feature set, KPIs, and result polygon"]
     L --> M["Frontend renders KPI cards, polygon overlay, pins, popups, and charts"]
 
     E --> N["Leaflet raster map loads OpenStreetMap base layer"]
@@ -54,13 +54,18 @@ flowchart TD
     P -->|"Yes"| Q["Load Band 10, clip to polygon, convert to LST Celsius"]
     P -->|"No"| R["Set LST raster to NaN and lst_status=missing"]
 
-    M --> S["Build anomaly feature array"]
+    M --> S{"LST available?"}
     Q --> S
     R --> S
-    T["15-day cumulative rainfall metadata"] --> S
-    S --> U["Isolation Forest anomaly detection"]
-    U --> V["Serialize clipped pixels"]
-    V --> W["Return polygon, pixels, NDVI summary, LST summary/status, and KPIs"]
+    S -->|"Yes"| T["Build full features: NDVI, NDVI diff, LST, rainfall"]
+    S -->|"No"| U["Build reduced features: NDVI, NDVI diff, rainfall"]
+    V["15-day cumulative rainfall metadata"] --> T
+    V --> U
+    T --> W["Isolation Forest anomaly detection"]
+    U --> W
+    W --> X["Apply rule-based guards for micro-polygons"]
+    X --> Y["Serialize clipped pixels"]
+    Y --> Z["Return polygon, pixels, NDVI summary, LST summary/status, anomaly_model_features, and KPIs"]
 ```
 
 ## Raster And Planetary Computer Stress Flow
@@ -108,6 +113,22 @@ flowchart TD
     H -->|"Yes"| C
     H -->|"No"| F
     F --> I["NDVI and anomaly results still return successfully"]
+```
+
+## Dynamic Anomaly Feature Flow
+
+```mermaid
+flowchart TD
+    A["Sentinel-2 NDVI pipeline succeeds"] --> B{"LST has valid pixels?"}
+    B -->|"Yes"| C["Use full Isolation Forest features: NDVI, NDVI diff, LST, rainfall"]
+    B -->|"No"| D["Use reduced Isolation Forest features: NDVI, NDVI diff, rainfall"]
+    C --> E{"At least 8 valid pixels?"}
+    D --> E
+    E -->|"Yes"| F["Fit Isolation Forest and predict anomaly flags"]
+    E -->|"No"| G["Skip model fit for micro-polygon"]
+    F --> H["Apply rule-based anomaly guards"]
+    G --> H
+    H --> I["Return is_anomaly per pixel and anomaly_model_features"]
 ```
 
 ## Frontend Error Flow
