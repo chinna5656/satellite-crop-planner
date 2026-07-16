@@ -533,7 +533,7 @@ function updatePlanner(payload, alerts) {
   const meanNdvi =
     payload.ndvi_summary?.mean ?? average(alerts.map((item) => item.ndvi));
   const stress = Number.isFinite(meanLst)
-    ? clamp((meanLst - 24) / 16, 0, 1)
+    ? clamp((meanLst - 28) / 17, 0, 1)
     : 0.4;
   const moisture = clamp(
     0.72 - stress * 0.38 + (meanNdvi || 0.5) * 0.12,
