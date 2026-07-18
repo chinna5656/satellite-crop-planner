@@ -1,6 +1,13 @@
 const API_URLS = [window.CROP_API_URL || "/api/analyze-field"];
 const MAX_DISPLAY_MARKERS = 60;
 
+const token = localStorage.getItem('access_token');
+
+if (!token) {
+    alert('กรุณาเข้าสู่ระบบก่อนใช้งาน!');
+    window.location.href = '/login'; // เด้งกลับไปหน้าล็อกอิน
+}
+
 const state = {
   bbox: null,
   polygon: null,
@@ -189,9 +196,11 @@ const elements = {
   analyzeBtn: document.getElementById("analyzeBtn"),
   clearFieldBtn: document.getElementById("clearFieldBtn"),
   jsonUpload: document.getElementById("jsonUpload"),
-  startDate: document.getElementById("startDate"),
-  endDate: document.getElementById("endDate"),
-  rainfallInput: document.getElementById("rainfallInput"),
+
+  startDate: document.getElementById("rasterStartDate"),
+  endDate: document.getElementById("rasterEndDate"),
+  rainfallInput: document.getElementById("rasterRainfall"),
+
   statusText: document.getElementById("statusText"),
   avgNdvi: document.getElementById("avgNdvi"),
   avgLst: document.getElementById("avgLst"),
@@ -711,11 +720,21 @@ async function postAnalysis(body) {
   for (const url of API_URLS) {
     const response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json" ,
+        "Authorization": `Bearer ${token}`
+      },
       body: JSON.stringify(body),
     });
-    const payload = await response.json().catch(() => ({}));
 
+    if (response.status === 401) {
+        alert("เซสชันหมดอายุ หรือไม่มีสิทธิ์เข้าถึง กรุณาเข้าสู่ระบบใหม่");
+        localStorage.removeItem("access_token");
+        window.location.href = "/login";
+        return null;
+    }
+
+    const payload = await response.json().catch(() => ({}));
     if (response.ok) return payload;
     const detail = formatApiDetail(payload.detail || payload.message || "");
     const isRouteMissing =

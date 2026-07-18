@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     max_ecostress_items: int = Field(default=5, ge=1, le=20)
     max_response_pixels: int = Field(default=15000, ge=100, le=250000)
     default_rainfall_mm_15d: float = Field(default=0.0, ge=0.0)
+    jwt_secret_key: str = Field(default="SUPER_SECRET_KEY_FOR_CROP_PLANNER_AI")
+    mock_login_username: str = Field(default="admin")
+    mock_login_password: str = Field(default="password123")
+    access_token_expire_minutes: int = Field(default=120, gt=0)
 
     model_config = SettingsConfigDict(
         env_file=".env",

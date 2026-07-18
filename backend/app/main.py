@@ -1,10 +1,13 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone  # 🆕 สำหรับตั้งเวลาหมดอายุ Token
+from jose import JWTError, jwt                      # 🆕 สำหรับเข้ารหัสและถอดรหัส JWT Token
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings
@@ -19,13 +22,18 @@ from app.schemas import (
     AnalyzeFieldResponse,
     AnalyzeStressRequest,
     AnalyzeStressResponse,
+    UserLogin,
+    Token,
 )
+
+# ระบบตรวจสอบ Token จาก Request Header (Authorization: Bearer <token>)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/login", auto_error=False)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 settings = get_settings()
-
+ALGORITHM = "HS256"
 
 app = FastAPI(
     title=settings.app_name,
@@ -38,6 +46,8 @@ app = FastAPI(
     redoc_url="/redoc" if settings.docs_enabled else None,
     openapi_url="/openapi.json" if settings.docs_enabled else None,
 )
+
+
 
 app.add_middleware(
     TrustedHostMiddleware,
@@ -80,7 +90,27 @@ def get_crop_analysis_service(
 ) -> CropAnalysisService:
     return CropAnalysisService(settings)
 
-
+def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
+    """ฟังก์ชันด่านตรวจ (Dependency) คอยตรวจสอบและแกะ JWT Token จาก Header"""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="กรุณาเข้าสู่ระบบก่อนสิทธิ์เข้าถึงข้อมูลวิเคราะห์พืช",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    if not token:
+        raise credentials_exception
+        
+    try:
+        # ถอดรหัสลับพิกเซลความปลอดภัย
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        return username
+    except JWTError:
+        raise credentials_exception
+    
 @app.get("/", include_in_schema=False)
 def frontend() -> FileResponse:
     if not settings.serve_frontend:
@@ -90,6 +120,28 @@ def frontend() -> FileResponse:
         raise HTTPException(status_code=404, detail="frontend/index.html not found")
     return FileResponse(index_path)
 
+@app.post("/api/login", response_model=Token)
+def login(user_data: UserLogin) -> dict:
+    """Endpoint สำหรับการตรวจสอบรหัสผ่าน และออกตั๋ว JWT Token ให้หน้าบ้าน"""
+    if (
+        user_data.username == settings.mock_login_username
+        and user_data.password == settings.mock_login_password
+    ):
+        # คำนวณเวลาหมดอายุของ Token
+        expire = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.access_token_expire_minutes
+        )
+        
+        # บรรจุข้อมูลใส่ตั๋ว (Payload)
+        token_data = {"sub": user_data.username, "exp": expire}
+        encoded_jwt = jwt.encode(token_data, settings.jwt_secret_key, algorithm=ALGORITHM)
+        
+        return {"access_token": encoded_jwt, "token_type": "bearer"}
+        
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="ชื่อผู้ใช้งาน หรือ รหัสผ่านในระบบไม่ถูกต้อง",
+    )
 
 @app.get("/raster", include_in_schema=False)
 def raster_page() -> FileResponse:
@@ -132,10 +184,21 @@ def api_routes() -> dict[str, list[str]]:
             routes.append(f"{','.join(sorted(methods))} {path}")
     return {"routes": sorted(routes)}
 
+@app.get("/login", include_in_schema=False)
+@app.get("/login.html", include_in_schema=False)
+def login_page() -> FileResponse:
+    if not settings.serve_frontend:
+        raise HTTPException(status_code=404, detail="Frontend serving is disabled")
+    login_path = FRONTEND_DIR / "login.html"
+    if not login_path.exists():
+        raise HTTPException(status_code=404, detail="frontend/login.html not found")
+    return FileResponse(login_path)
 
 @app.post("/api/analyze-stress", response_model=AnalyzeStressResponse)
 @app.post("/api/analyze-stress/", response_model=AnalyzeStressResponse, include_in_schema=False)
-def analyze_stress(request: AnalyzeStressRequest) -> AnalyzeStressResponse:
+def analyze_stress(request: AnalyzeStressRequest,
+                   current_user: str = Depends(get_current_user)
+                ) -> AnalyzeStressResponse:
     """Run Microsoft Planetary Computer field stress analysis for raster overlays."""
 
     try:
@@ -269,6 +332,7 @@ def analyze_field(
     request: AnalyzeFieldRequest,
     settings: Settings = Depends(get_settings),
     service: CropAnalysisService = Depends(get_crop_analysis_service),
+    current_user: str = Depends(get_current_user)
 ) -> AnalyzeFieldResponse:
     """Run the full satellite crop-health pipeline for a field bounding box."""
 

@@ -1,7 +1,17 @@
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel
 
+# สำหรับรับข้อมูลตอน Login
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+# สำหรับส่ง Token กลับไปหน้าบ้าน
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
 BBox = Annotated[
     list[float],

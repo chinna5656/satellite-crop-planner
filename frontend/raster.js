@@ -2,6 +2,13 @@ const ANALYZE_STRESS_URL = window.CROP_STRESS_API_URL || "/api/analyze-stress";
 const THAILAND_CENTER = [15.87, 100.9925];
 const THAILAND_ZOOM = 6;
 
+const token = localStorage.getItem('access_token');
+
+if (!token) {
+    alert('กรุณาเข้าสู่ระบบก่อนใช้งาน!');
+    window.location.href = '/login'; // เด้งกลับไปหน้าล็อกอิน
+}
+
 const rasterState = {
   drawnLayer: null,
   polygon: null,
@@ -153,9 +160,17 @@ async function analyzeStress() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
       },
       body: JSON.stringify(requestBody),
     });
+
+    if (response.status === 401) {
+        alert("เซสชันหมดอายุ หรือไม่มีสิทธิ์เข้าถึง กรุณาเข้าสู่ระบบใหม่");
+        localStorage.removeItem("access_token");
+        window.location.href = "/login";
+        return;
+    }
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {

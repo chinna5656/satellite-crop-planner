@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>เข้าสู่ระบบ - Satellite Crop Planner</title>
+    <!-- โหลด Tailwind CSS ให้หน้าเว็บสวยงามทันที -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        body {
+            font-family: "Noto Sans Thai", "Leelawadee UI", "Tahoma", sans-serif;
+            /* เพิ่มลวดลายพื้นหลังจางๆ ให้ดูมีมิติเชิงเทคโนโลยี/แผนที่ */
+            background-color: #f8fafc;
+            background-image: radial-gradient(#10b981 0.75px, transparent 0.75px), radial-gradient(#10b981 0.75px, #f8fafc 0.75px);
+            background-size: 30px 30px;
+            background-position: 0 0, 15px 15px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative">
+    
+    <!-- ส่วนหัว (โลโก้และชื่อระบบ) -->
+    <div class="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+        <div class="mx-auto h-16 w-16 bg-emerald-100 rounded-2xl flex items-center justify-center shadow-sm border border-emerald-200">
+            <!-- ไอคอนแผนที่/ดาวเทียม -->
+            <svg class="h-9 w-9 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+        </div>
+        <h2 class="mt-6 text-center text-3xl font-extrabold text-slate-900 tracking-tight">
+            Satellite Crop Planner
+        </h2>
+        <p class="mt-2 text-center text-sm text-slate-500 font-medium">
+            ระบบวิเคราะห์และวางแผนจัดการเพาะปลูกอัจฉริยะ
+        </p>
+    </div>
+
+    <!-- ส่วนฟอร์มล็อกอิน -->
+    <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+        <div class="bg-white/90 backdrop-blur-md py-8 px-4 shadow-2xl sm:rounded-2xl sm:px-10 border border-slate-100">
+            <form id="loginForm" class="space-y-6">
+                
+                <!-- ช่องกรอกชื่อผู้ใช้ -->
+                <div>
+                    <label for="username" class="block text-sm font-bold text-slate-700">
+                        ชื่อผู้ใช้งาน
+                    </label>
+                    <div class="mt-2 relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <svg class="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                        </div>
+                        <input id="username" type="text" required 
+                            class="appearance-none block w-full pl-10 pr-3 py-2.5 border border-slate-300 rounded-lg shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm transition-colors" 
+                            placeholder="admin">
+                    </div>
+                </div>
+
+                <!-- ช่องกรอกรหัสผ่าน -->
+                <div>
+                    <label for="password" class="block text-sm font-bold text-slate-700">
+                        รหัสผ่าน
+                    </label>
+                    <div class="mt-2 relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <svg class="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                            </svg>
+                        </div>
+                        <input id="password" type="password" required 
+                            class="appearance-none block w-full pl-10 pr-3 py-2.5 border border-slate-300 rounded-lg shadow-sm placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 sm:text-sm transition-colors" 
+                            placeholder="••••••••">
+                    </div>
+                </div>
+
+                <!-- กล่องข้อความแจ้งเตือน Error (เชื่อมกับ JS ตัวเดิม) -->
+                <p id="errorMessage" style="display: none;" 
+                   class="rounded-lg bg-red-50 p-3 border border-red-200 text-sm font-semibold text-red-600 text-center shadow-sm">
+                </p>
+
+                <!-- ปุ่ม Submit -->
+                <div class="pt-2">
+                    <button type="submit" 
+                        class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-lg text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition-all duration-200">
+                        เข้าสู่ระบบ
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script src="/static/login.js"></script>
+</body>
+</html>
