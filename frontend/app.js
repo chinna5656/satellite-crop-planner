@@ -213,6 +213,7 @@ const elements = {
   sidebar: document.querySelector(".sidebar"),
   manualCoordsInput: document.getElementById("manualCoordsInput"),
   plotManualPolygonBtn: document.getElementById("plotManualPolygonBtn"),
+  logoutBtn: document.getElementById("logoutBtn"),
 };
 
 function setDefaultDates() {
@@ -1003,6 +1004,13 @@ if (elements.plotManualBtn) {
 
 if (elements.plotManualPolygonBtn) {
   elements.plotManualPolygonBtn.addEventListener("click", processManualPolygon);
+}
+
+if (elements.logoutBtn) {
+  elements.logoutBtn.addEventListener("click", () => {
+    localStorage.removeItem("access_token");
+    window.location.href = "/login";
+  });
 }
 
 window.addEventListener("resize", () => map.invalidateSize());

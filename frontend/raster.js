@@ -83,6 +83,7 @@ const rasterElements = {
   lst: document.getElementById("rasterLst"),
   risk: document.getElementById("rasterRisk"),
   cells: document.getElementById("rasterCells"),
+  logoutBtn: document.getElementById("logoutBtn"),
 };
 
 rasterMap.on(L.Draw.Event.CREATED, (event) => {
@@ -119,6 +120,11 @@ rasterElements.plotManualPolygon?.addEventListener("click", plotManualPolygon);
 rasterElements.mobilePanel?.addEventListener("click", () => {
   rasterElements.sidebar.classList.toggle("open");
   setTimeout(() => rasterMap.invalidateSize(), 260);
+});
+// 🆕 คำสั่งออกจากระบบ
+rasterElements.logoutBtn?.addEventListener("click", () => {
+  localStorage.removeItem("access_token");
+  window.location.href = "/login";
 });
 
 document.querySelectorAll(".layer-toggle").forEach((button) => {
